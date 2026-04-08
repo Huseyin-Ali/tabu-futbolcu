@@ -1,0 +1,55 @@
+📝 OYUNUN İŞLEYİŞİ:
+
+Takım İsimlerini Girin
+İki takım oluşturun ve isimlerini belirleyin.
+
+Oyun Ayarlarını Yapın
+• Süre (varsayılan: 60 saniye)
+• Pas hakkı
+• Tabu cezası (yanlış kelime kullanıldığında uygulanır)
+• Puan hedefi (varsayılan: 50 puan)
+
+Maçı Başlat Butonuna Basın
+İlk başlatmada "Maçı Başlat" butonuna basın. Geri sayım başlar ve oyun başlar.
+
+Anlatıcıya Bir Kart Gelir
+Ekranda bir futbolcunun ismi ve 5 yasaklı kelime görünür.
+
+Anlatıcı bu yasaklı kelimeleri söylemeden takımına futbolcuyu anlatır.
+
+📌 Not: Özel oyuncu kartları ilerleyen süreçte eklenecektir.
+
+Takım Tahminde Bulunur
+Takım doğru tahmin ederse anlatıcı "✅ DOĞRU" butonuna basar.
+
+Yanlış Kelime Kullanılırsa
+Anlatıcı "❌ TABU" butonuna basar ve takım ceza alır.
+
+Bilemezlerse
+Anlatıcı "➡️ PAS" butonuna basar ve sıradaki karta geçilir. Pas hakkı azalır.
+
+Süre Bitince
+Süre bittiğinde sıra diğer takıma geçer. "Maça Devam Et" butonuna basarak devam edebilirsiniz.
+
+Oyun Kontrolleri
+• ⏸️ Pause: Oyunu duraklatır ve menü seçenekleri sunar
+• 🔊 Ses: Ses efektlerini açıp kapatabilirsiniz
+
+Kazanma Koşulu
+Hedef puana (varsayılan 50) ilk ulaşan takım kazanır!
+
+🏆 PUANLAMA:
+
+✅ Her doğru tahmin: +1 puan
+
+❌ Tabu kelimesi kullanılırsa: -[Tabu Cezası] puan
+
+➡️ Pas: Hakkınız varsa geçilir (puan değişmez)
+
+📈 GEÇMİŞ OYUNLAR
+
+Oynanan oyunlar kaydedilir.
+
+Skorları ve takımları "Kirli Defter" ekranından inceleyebilirsiniz.
+
+🎉 Futbol bilginizi konuşturun, yasaklı kelimelere dikkat edin ve takımınızla en yüksek puanı kazanın!
