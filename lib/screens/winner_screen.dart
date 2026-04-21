@@ -67,6 +67,7 @@ class _WinnerScreenState extends State<WinnerScreen>
 
     // Oyun geçmişine kaydet
     _oyunGecmisineKaydet();
+
   }
 
   void _oyunGecmisineKaydet() {

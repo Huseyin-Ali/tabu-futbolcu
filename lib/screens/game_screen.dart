@@ -10,6 +10,7 @@ import '../storage/hive_game_storage.dart';
 import '../services/futbolcu_service.dart';
 import '../models/futbolcu.dart';
 import '../constants/app_constants.dart';
+import '../services/analytics_service.dart';
 import 'winner_screen.dart';
 import 'welcome_screen.dart';
 
@@ -65,6 +66,9 @@ class _GameScreenState extends State<GameScreen>
   final Set<String> _kullanilmisFutbolcular = <String>{};
   final List<int> _kartSirasi = <int>[];
   int _kartIndex = 0;
+
+  /// Aynı kartın `card_shown` event'ini tekrar loglamasını önler.
+  String? _lastShownPlayerId;
 
   final AudioPlayer _audioPlayer = AudioPlayer();
 
@@ -137,6 +141,7 @@ class _GameScreenState extends State<GameScreen>
       _sesAcik = !_sesAcik;
       prefs.setBool(AppConstants.keySesAcik, _sesAcik);
     });
+    AnalyticsService.logAudioToggled(isSoundOn: _sesAcik);
   }
 
   Future<void> _sesCal(String sesDosyasi) async {
@@ -167,6 +172,7 @@ class _GameScreenState extends State<GameScreen>
         _isPaused = true;
       });
       _ticker.stop();
+      AnalyticsService.logMatchPaused();
 
       showDialog(
         context: context,
@@ -189,6 +195,7 @@ class _GameScreenState extends State<GameScreen>
                     _tickerStartTime = DateTime.now();
                   });
                   _ticker.start();
+                  AnalyticsService.logMatchResumed();
                 },
                 child: const Text('Devam Et',
                     style: TextStyle(color: Colors.green, fontSize: 16)),
@@ -222,28 +229,44 @@ class _GameScreenState extends State<GameScreen>
   void _onTick(Duration elapsed) {
     if (!mounted) return;
     if (_isPaused) return;
-    if (_currentTime > 0) {
-      setState(() {
-        final totalElapsed = _pausedElapsed + elapsed;
-        _currentTime = _totalTime - totalElapsed.inSeconds;
-        if (_currentTime <= 0) {
-          _currentTime = 0;
-          _ticker.stop();
-          _team1Sirasi = !_team1Sirasi;
-          _dogruSayisi = 0;
-          _ballTops.clear();
-          _pausedElapsed = Duration.zero;
-          _showStartButton = true;
-          _showCountdown = false;
-          _isFirstStart = false;
-          _ballsLeft = 3;
-          if (_onbellekFutbolcular.isNotEmpty) {
-            _kartHavuzunuHazirla();
-          }
-          _futbolcuSec();
-        }
-      });
+    if (_currentTime <= 0) return;
+
+    final totalElapsed = _pausedElapsed + elapsed;
+    final computed = _totalTime - totalElapsed.inSeconds;
+
+    if (computed <= 0) {
+      _handleTurnTimeout();
+    } else {
+      setState(() => _currentTime = computed);
     }
+  }
+
+  /// Süre dolduğunda sırayı değiştirir ve `turn_timeout` event'ini loglar.
+  void _handleTurnTimeout() {
+    final previousTeam = _team1Sirasi ? _team1Ismi : _team2Ismi;
+    final nextTeam = _team1Sirasi ? _team2Ismi : _team1Ismi;
+
+    AnalyticsService.logTurnTimeout(
+      previousTeam: previousTeam,
+      nextTeam: nextTeam,
+    );
+
+    setState(() {
+      _currentTime = 0;
+      _ticker.stop();
+      _team1Sirasi = !_team1Sirasi;
+      _dogruSayisi = 0;
+      _ballTops.clear();
+      _pausedElapsed = Duration.zero;
+      _showStartButton = true;
+      _showCountdown = false;
+      _isFirstStart = false;
+      _ballsLeft = 3;
+      if (_onbellekFutbolcular.isNotEmpty) {
+        _kartHavuzunuHazirla();
+      }
+      _futbolcuSec();
+    });
   }
 
   void _startGameTimer() {
@@ -257,6 +280,10 @@ class _GameScreenState extends State<GameScreen>
   }
 
   void _baslatMac() {
+    AnalyticsService.logMatchStarted(
+      timeLimit: _totalTime,
+      targetScore: _puanHedefi,
+    );
     setState(() {
       _showStartButton = false;
       _showCountdown = true;
@@ -266,6 +293,7 @@ class _GameScreenState extends State<GameScreen>
   }
 
   void _startCountdown() async {
+    AnalyticsService.logCountdownStarted();
     for (int i = 3; i > 0; i--) {
       if (!mounted) return;
       setState(() {
@@ -277,6 +305,10 @@ class _GameScreenState extends State<GameScreen>
     setState(() {
       _showCountdown = false;
     });
+    AnalyticsService.logTurnStarted(
+      activeTeam: _team1Sirasi ? _team1Ismi : _team2Ismi,
+      remainingTime: _totalTime,
+    );
     _startGameTimer();
   }
 
@@ -338,19 +370,35 @@ class _GameScreenState extends State<GameScreen>
         _secilenFutbolcu = secilen.isim;
         _secilenTabuKelimeler = secilen.tabuKelimeler;
       });
+      _logCardShownIfNew(secilen.id, secilen.isim);
       return;
     }
+    // Tüm kartlar kullanıldı — havuzu sıfırla ve ilk kartı göster.
     _kartHavuzunuHazirla();
     if (!mounted) return;
+    final fallback = _onbellekFutbolcular[_kartSirasi.first];
     setState(() {
-      _secilenFutbolcu = _onbellekFutbolcular[_kartSirasi.first].isim;
-      _secilenTabuKelimeler =
-          _onbellekFutbolcular[_kartSirasi.first].tabuKelimeler;
+      _secilenFutbolcu = fallback.isim;
+      _secilenTabuKelimeler = fallback.tabuKelimeler;
     });
+    _logCardShownIfNew(fallback.id, fallback.isim);
+  }
+
+  /// Yalnızca öncekinden farklı bir kart gösterildiğinde loglar.
+  void _logCardShownIfNew(String playerId, String playerName) {
+    if (_lastShownPlayerId == playerId) return;
+    _lastShownPlayerId = playerId;
+    AnalyticsService.logCardShown(playerId: playerId, playerName: playerName);
   }
 
   void _dogruBildi() async {
     await _sesCal(AppConstants.soundGol);
+
+    // setState öncesi anlık değerleri yakala (futbolcuSec sonrası değişir).
+    final activeTeam = _team1Sirasi ? _team1Ismi : _team2Ismi;
+    final currentPlayer = _secilenFutbolcu;
+    final remainingTime = _currentTime;
+
     bool kazananVar = false;
     int yeniTeam1Skor = _team1Skor;
     int yeniTeam2Skor = _team2Skor;
@@ -377,7 +425,25 @@ class _GameScreenState extends State<GameScreen>
         }
       }
     });
+
+    AnalyticsService.logCorrectGuess(
+      activeTeam: activeTeam,
+      team1Score: yeniTeam1Skor,
+      team2Score: yeniTeam2Skor,
+      currentPlayer: currentPlayer,
+      remainingTime: remainingTime,
+    );
+
     if (kazananVar) {
+      final winnerTeam =
+          yeniTeam1Skor >= _puanHedefi ? _team1Ismi : _team2Ismi;
+      await AnalyticsService.logMatchFinished(
+        winnerTeam: winnerTeam,
+        team1Score: yeniTeam1Skor,
+        team2Score: yeniTeam2Skor,
+        targetScore: _puanHedefi,
+      );
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -395,6 +461,11 @@ class _GameScreenState extends State<GameScreen>
 
   void _tabuYapildi() async {
     await _sesCal(AppConstants.soundWhistle);
+
+    final activeTeam = _team1Sirasi ? _team1Ismi : _team2Ismi;
+    final currentPlayer = _secilenFutbolcu;
+    final remainingTime = _currentTime;
+
     setState(() {
       if (_team1Sirasi) {
         if (_team1Skor >= _tabuCezasi) {
@@ -441,15 +512,32 @@ class _GameScreenState extends State<GameScreen>
       }
       _futbolcuSec();
     });
+
+    AnalyticsService.logTabuFail(
+      activeTeam: activeTeam,
+      team1Score: _team1Skor,
+      team2Score: _team2Skor,
+      currentPlayer: currentPlayer,
+      remainingTime: remainingTime,
+    );
   }
 
   void _pasYap() {
+    final currentPlayer = _secilenFutbolcu;
+    final remainingTime = _currentTime;
+
     if (_team1Sirasi) {
       if (_team1PasHakki > 0) {
         setState(() {
           _team1PasHakki--;
           _futbolcuSec();
         });
+        AnalyticsService.logPassUsed(
+          activeTeam: _team1Ismi,
+          remainingPassCount: _team1PasHakki,
+          currentPlayer: currentPlayer,
+          remainingTime: remainingTime,
+        );
       }
     } else {
       if (_team2PasHakki > 0) {
@@ -457,6 +545,12 @@ class _GameScreenState extends State<GameScreen>
           _team2PasHakki--;
           _futbolcuSec();
         });
+        AnalyticsService.logPassUsed(
+          activeTeam: _team2Ismi,
+          remainingPassCount: _team2PasHakki,
+          currentPlayer: currentPlayer,
+          remainingTime: remainingTime,
+        );
       }
     }
   }
