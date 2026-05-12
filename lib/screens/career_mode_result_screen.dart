@@ -19,6 +19,17 @@ class CareerModeResultScreen extends StatefulWidget {
   final int pasSayisi;
   final int sure;
   final String zorluk;
+  final int maxCombo;
+  final int bonusScore;
+  final int remainingLives;
+  final int usedHintCount;
+  final int hintedCorrectCount;
+  final int totalRiskCount;
+  final int acceptedRiskCount;
+  final int wonRiskCount;
+  final int lostRiskCount;
+  final int riskScoreGain;
+  final int riskScoreLoss;
 
   const CareerModeResultScreen({
     super.key,
@@ -28,6 +39,17 @@ class CareerModeResultScreen extends StatefulWidget {
     required this.pasSayisi,
     required this.sure,
     required this.zorluk,
+    this.maxCombo = 0,
+    this.bonusScore = 0,
+    this.remainingLives = 0,
+    this.usedHintCount = 0,
+    this.hintedCorrectCount = 0,
+    this.totalRiskCount = 0,
+    this.acceptedRiskCount = 0,
+    this.wonRiskCount = 0,
+    this.lostRiskCount = 0,
+    this.riskScoreGain = 0,
+    this.riskScoreLoss = 0,
   });
 
   @override
@@ -77,6 +99,17 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
       sure: widget.sure,
       basariOrani: _dogrulukOrani,
       tarih: DateTime.now(),
+      maxCombo: widget.maxCombo,
+      bonusScore: widget.bonusScore,
+      remainingLives: widget.remainingLives,
+      usedHintCount: widget.usedHintCount,
+      hintedCorrectCount: widget.hintedCorrectCount,
+      totalRiskCount: widget.totalRiskCount,
+      acceptedRiskCount: widget.acceptedRiskCount,
+      wonRiskCount: widget.wonRiskCount,
+      lostRiskCount: widget.lostRiskCount,
+      riskScoreGain: widget.riskScoreGain,
+      riskScoreLoss: widget.riskScoreLoss,
     );
 
     HiveGameStorage.ekleKariyerOyunu(kayit).then((_) {
@@ -118,17 +151,17 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
     _scoreFade = CurvedAnimation(
         parent: _mainCtrl, curve: const Interval(0.04, 0.30, curve: Curves.easeOut));
 
-    // Stat cards staggered
-    const starts = [0.30, 0.40, 0.50, 0.60];
+    // Stat cards staggered (6 items)
+    const starts = [0.28, 0.36, 0.44, 0.52, 0.60, 0.68];
     _statFades = starts
         .map((s) => CurvedAnimation(
-            parent: _mainCtrl, curve: Interval(s, s + 0.26, curve: Curves.easeOut)))
+            parent: _mainCtrl, curve: Interval(s, s + 0.24, curve: Curves.easeOut)))
         .toList();
     _statSlides = starts
         .map((s) => Tween<Offset>(begin: const Offset(0, 0.40), end: Offset.zero)
             .animate(CurvedAnimation(
                 parent: _mainCtrl,
-                curve: Interval(s, s + 0.26, curve: Curves.easeOutCubic))))
+                curve: Interval(s, s + 0.24, curve: Curves.easeOutCubic))))
         .toList();
 
     // Bar + buttons
@@ -187,6 +220,19 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
                   // ── Stat grid
                   _buildStatGrid(),
                   const SizedBox(height: 10),
+                  // ── Kalan can göstergesi
+                  FadeTransition(opacity: _barFade, child: _buildRemainingLives()),
+                  const SizedBox(height: 8),
+                  // ── İpucu bilgisi (sadece kullanıldıysa)
+                  if (widget.usedHintCount > 0)
+                    FadeTransition(
+                        opacity: _barFade, child: _buildHintInfo()),
+                  if (widget.usedHintCount > 0) const SizedBox(height: 8),
+                  // ── Risk kartı özeti (sadece risk kartı geldiyse)
+                  if (widget.totalRiskCount > 0)
+                    FadeTransition(
+                        opacity: _barFade, child: _buildRiskSummary()),
+                  if (widget.totalRiskCount > 0) const SizedBox(height: 8),
                   // ── Accuracy bar
                   FadeTransition(opacity: _barFade, child: _buildAccuracyBar()),
                   const SizedBox(height: 22),
@@ -450,6 +496,22 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
         darkBg: const Color(0xFF05091A),
         midBg: const Color(0xFF0D1535),
       ),
+      _StatData(
+        label: 'Max Combo',
+        value: 'x${widget.maxCombo}',
+        icon: Icons.local_fire_department_rounded,
+        accent: const Color(0xFFFF6E40),
+        darkBg: const Color(0xFF1A0900),
+        midBg: const Color(0xFF2E1400),
+      ),
+      _StatData(
+        label: 'Bonus Puan',
+        value: '+${widget.bonusScore}',
+        icon: Icons.auto_awesome_rounded,
+        accent: const Color(0xFFE040FB),
+        darkBg: const Color(0xFF15001A),
+        midBg: const Color(0xFF260030),
+      ),
     ];
 
     return GridView.builder(
@@ -461,7 +523,7 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
         mainAxisSpacing: 10,
         childAspectRatio: 1.65,
       ),
-      itemCount: 4,
+      itemCount: 6,
       itemBuilder: (_, i) => FadeTransition(
         opacity: _statFades[i],
         child: SlideTransition(
@@ -593,6 +655,202 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
           ),
         ],
       ),
+    );
+  }
+
+  // ── REMAINING LIVES ───────────────────────────────────────────────────────
+
+  Widget _buildRemainingLives() {
+    const totalLives = 3;
+    final remaining = widget.remainingLives.clamp(0, totalLives);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.08), width: 1.5),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.favorite, color: Colors.redAccent, size: 15,
+                  shadows: [Shadow(color: Colors.red, blurRadius: 8)]),
+              const SizedBox(width: 6),
+              const Text(
+                'Kalan Can',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: List.generate(totalLives, (i) {
+              final dolu = i < remaining;
+              return Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Icon(
+                  dolu ? Icons.favorite : Icons.favorite_border,
+                  color: dolu ? Colors.redAccent : Colors.white24,
+                  size: 22,
+                  shadows: dolu
+                      ? const [Shadow(color: Colors.red, blurRadius: 10)]
+                      : null,
+                ),
+              );
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── HINT INFO ─────────────────────────────────────────────────────────────
+
+  Widget _buildHintInfo() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.amberAccent.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: Colors.amberAccent.withOpacity(0.25), width: 1.2),
+      ),
+      child: Row(
+        children: [
+          const Text('💡', style: TextStyle(fontSize: 15)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'İpucu kullanıldı — ${widget.hintedCorrectCount} doğru cevap '
+              'yarım puanla sayıldı.',
+              style: TextStyle(
+                color: Colors.amberAccent.withOpacity(0.85),
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── RISK SUMMARY ──────────────────────────────────────────────────────────
+
+  Widget _buildRiskSummary() {
+    final netGain = widget.riskScoreGain - widget.riskScoreLoss;
+    final netColor = netGain >= 0
+        ? const Color(0xFF00E676)
+        : const Color(0xFFFF5252);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFFFF6D00).withOpacity(0.08),
+            const Color(0xFF1A0800).withOpacity(0.6),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: Colors.deepOrange.withOpacity(0.30), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+              color: Colors.deepOrange.withOpacity(0.10),
+              blurRadius: 14,
+              spreadRadius: -4),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Başlık
+          Row(
+            children: [
+              const Text('⚡', style: TextStyle(fontSize: 14)),
+              const SizedBox(width: 8),
+              const Text(
+                'Risk Kartı Özeti',
+                style: TextStyle(
+                  color: Colors.orangeAccent,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: netColor.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border:
+                      Border.all(color: netColor.withOpacity(0.5), width: 1),
+                ),
+                child: Text(
+                  '${netGain >= 0 ? '+' : ''}$netGain puan',
+                  style: TextStyle(
+                    color: netColor,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // İstatistik satırları
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              _riskChip('Geldi', '${widget.totalRiskCount}',
+                  Colors.white54),
+              _riskChip('Kabul', '${widget.acceptedRiskCount}',
+                  Colors.orangeAccent),
+              _riskChip('Kazandı', '${widget.wonRiskCount}',
+                  const Color(0xFF00E676)),
+              _riskChip('Kaybetti', '${widget.lostRiskCount}',
+                  const Color(0xFFFF5252)),
+              _riskChip('+${widget.riskScoreGain}',
+                  'kazanılan', const Color(0xFF00E676)),
+              _riskChip('-${widget.riskScoreLoss}',
+                  'kaybedilen', const Color(0xFFFF5252)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _riskChip(String value, String label, Color color) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: TextStyle(
+            color: color.withOpacity(0.65),
+            fontSize: 11,
+          ),
+        ),
+      ],
     );
   }
 

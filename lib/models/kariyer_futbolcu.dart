@@ -6,11 +6,19 @@ class KariyerFutbolcu {
   final List<String> kariyerYolu;
   final String zorluk;
 
+  // İpucu alanları — Firestore'da yoksa null
+  final String? ulke;
+  final String? pozisyon;
+  final int? dogumYili;
+
   const KariyerFutbolcu({
     required this.id,
     required this.isim,
     required this.kariyerYolu,
     required this.zorluk,
+    this.ulke,
+    this.pozisyon,
+    this.dogumYili,
   });
 
   factory KariyerFutbolcu.fromDoc(
@@ -38,11 +46,33 @@ class KariyerFutbolcu {
     final zorluk =
         (data['zorluk'] ?? 'orta').toString().toLowerCase().trim();
 
+    // İpucu alanları — birden fazla alan adını dene
+    String? ulke;
+    final rawUlke = (data['ulke'] ?? data['ülke'] ?? data['country'] ?? '')
+        .toString()
+        .trim();
+    if (rawUlke.isNotEmpty) ulke = rawUlke;
+
+    String? pozisyon;
+    final rawPoz =
+        (data['pozisyon'] ?? data['position'] ?? '').toString().trim();
+    if (rawPoz.isNotEmpty) pozisyon = rawPoz;
+
+    int? dogumYili;
+    final rawDY = data['dogum_yili'] ?? data['dogumYili'] ??
+        data['birth_year'] ?? data['yil'];
+    if (rawDY != null) {
+      dogumYili = int.tryParse(rawDY.toString());
+    }
+
     return KariyerFutbolcu(
       id: doc.id,
       isim: isim,
       kariyerYolu: kariyerYolu,
       zorluk: zorluk,
+      ulke: ulke,
+      pozisyon: pozisyon,
+      dogumYili: dogumYili,
     );
   }
 }

@@ -364,15 +364,18 @@ class _GameHistoryScreenState extends State<GameHistoryScreen> {
           ),
           const SizedBox(height: 10),
 
-          // ── Alt satır: zorluk + süre
+          // ── Alt satır: zorluk + süre + max combo
           Row(
             children: [
               _pillBadge(
-                  oyun.zorluk[0].toUpperCase() +
-                      oyun.zorluk.substring(1),
+                  oyun.zorluk[0].toUpperCase() + oyun.zorluk.substring(1),
                   zorlukRengi),
               const SizedBox(width: 8),
               _pillBadge('${oyun.sure} sn', Colors.white24),
+              if (oyun.maxCombo > 0) ...[
+                const SizedBox(width: 8),
+                _pillBadge('🔥 x${oyun.maxCombo}', Colors.deepOrangeAccent),
+              ],
             ],
           ),
         ],
