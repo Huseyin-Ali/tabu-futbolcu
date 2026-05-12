@@ -4,6 +4,7 @@ class AppConstants {
   static const String gameHistoryBox = 'gameHistory';
   static const String gameBox = 'gameBox';
   static const String futbolcularBox = 'futbolcular';
+  static const String kariyerGecmisKey = 'kariyerGecmisOyunlar';
 
   // SharedPreferences Keys
   static const String keyZamanLimiti = 'zamanLimiti';

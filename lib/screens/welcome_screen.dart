@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'team_setup_screen.dart';
 import '../widgets/background_with_logo.dart';
 import 'game_history_screen.dart';
+import 'game_mode_select_screen.dart';
 import '../constants/app_constants.dart';
 
 class WelcomeScreen extends StatelessWidget {
@@ -72,7 +72,7 @@ class WelcomeScreen extends StatelessWidget {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => const TeamSetupScreen(),
+                        builder: (context) => const GameModeSelectScreen(),
                       ),
                     );
                   }),
