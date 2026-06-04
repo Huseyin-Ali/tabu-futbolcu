@@ -21,6 +21,9 @@ class CareerGameHistory {
   final int lostRiskCount;
   final int riskScoreGain;
   final int riskScoreLoss;
+  final int blitzTriggerCount;
+  final int blitzCorrectCount;
+  final int blitzBonusScore;
 
   CareerGameHistory({
     required this.skor,
@@ -43,6 +46,9 @@ class CareerGameHistory {
     this.lostRiskCount = 0,
     this.riskScoreGain = 0,
     this.riskScoreLoss = 0,
+    this.blitzTriggerCount = 0,
+    this.blitzCorrectCount = 0,
+    this.blitzBonusScore = 0,
   });
 
   Map<String, dynamic> toMap() => {
@@ -67,6 +73,9 @@ class CareerGameHistory {
         'lostRiskCount': lostRiskCount,
         'riskScoreGain': riskScoreGain,
         'riskScoreLoss': riskScoreLoss,
+        'blitzTriggerCount': blitzTriggerCount,
+        'blitzCorrectCount': blitzCorrectCount,
+        'blitzBonusScore': blitzBonusScore,
       };
 
   static CareerGameHistory fromMap(Map<String, dynamic> map) =>
@@ -91,5 +100,8 @@ class CareerGameHistory {
         lostRiskCount: (map['lostRiskCount'] as num?)?.toInt() ?? 0,
         riskScoreGain: (map['riskScoreGain'] as num?)?.toInt() ?? 0,
         riskScoreLoss: (map['riskScoreLoss'] as num?)?.toInt() ?? 0,
+        blitzTriggerCount: (map['blitzTriggerCount'] as num?)?.toInt() ?? 0,
+        blitzCorrectCount: (map['blitzCorrectCount'] as num?)?.toInt() ?? 0,
+        blitzBonusScore: (map['blitzBonusScore'] as num?)?.toInt() ?? 0,
       );
 }

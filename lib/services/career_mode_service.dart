@@ -1,58 +1,365 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'package:hive/hive.dart';
+import '../constants/app_constants.dart';
 import '../models/kariyer_futbolcu.dart';
 import '../utils/logger.dart';
 
 class CareerModeService {
+  static const _aktifKoleksiyon = 'tumAktifFutbolcular';
+  static const _emekliKoleksiyon = 'tumEmekliFutbolcular';
+  static const _configCollection = 'game_configs';
+  static const _matchConfigDocumentId = 'default_match_config';
+  static const _playersVersionField = 'career_players_meta';
+  static const _cacheKeyAktif = 'aktif';
+  static const _cacheKeyEmekli = 'emekli';
+  static const _cacheKeyMetaVersion = 'meta_version';
+
   /// Firestore'dan kariyer_yolu dolu futbolcuları çeker.
-  /// Önce sunucudan taze veri alır, başarısız olursa yerel cache'e düşer.
-  /// Veri bulunamazsa boş liste döner — demo fallback yoktur.
+  /// [koleksiyonTipi]: 'aktif', 'veteran' veya 'karışık'
+  /// Önce Hive cache kontrol edilir; veri varsa oyun cache ile başlar,
+  /// Firestore güncellemesi arka planda yapılır.
   static Future<List<KariyerFutbolcu>> getKariyerFutbolculari({
     String zorluk = 'karışık',
+    String koleksiyonTipi = 'karışık',
   }) async {
-    QuerySnapshot<Map<String, dynamic>>? snap;
+    final secilenKoleksiyon = koleksiyonTipi.toLowerCase().trim();
+    final box = await _openCacheBox();
+    final cachedAktif = _readCachedList(box, _cacheKeyAktif);
+    final cachedEmekli = _readCachedList(box, _cacheKeyEmekli);
 
-    try {
-      snap = await FirebaseFirestore.instance
-          .collection('tumAktifFutbolcular')
-          .get(const GetOptions(source: Source.server));
-      AppLogger.info('[CareerMode] Sunucudan ${snap.docs.length} döküman çekildi');
-    } catch (serverErr) {
-      AppLogger.warning('[CareerMode] Sunucuya ulaşılamadı, cache deneniyor: $serverErr');
-      try {
-        snap = await FirebaseFirestore.instance
-            .collection('tumAktifFutbolcular')
-            .get(const GetOptions(source: Source.cache));
-        AppLogger.info('[CareerMode] Cache\'den ${snap.docs.length} döküman çekildi');
-      } catch (cacheErr) {
-        AppLogger.error('[CareerMode] Cache de başarısız', cacheErr);
-      }
+    if (_isCacheReady(secilenKoleksiyon, cachedAktif, cachedEmekli)) {
+      final tumListe = _mergeByKoleksiyon(
+        cachedAktif,
+        cachedEmekli,
+        secilenKoleksiyon,
+      );
+
+      AppLogger.info('[CareerMode] Cache kullanıldı');
+      AppLogger.info(
+        '[CareerMode] ${tumListe.length} kariyer futbolcu hazır '
+        '(kaynak: cache, koleksiyon: $secilenKoleksiyon, '
+        'aktif: ${cachedAktif.length}, emekli: ${cachedEmekli.length}, '
+        'zorluk: $zorluk)',
+      );
+
+      _refreshCacheInBackground();
+      return _applyZorlukFilter(tumListe, zorluk);
     }
 
-    if (snap == null) {
+    final fetched = await _fetchFromFirestore(secilenKoleksiyon);
+    await _writeCacheFromFetch(box, fetched);
+
+    final remoteVersion = await _fetchRemotePlayersVersion();
+    if (remoteVersion != null) {
+      await _writeLocalPlayersVersion(box, remoteVersion);
+    }
+
+    final tumListe = _mergeByKoleksiyon(
+      fetched.aktif,
+      fetched.emekli,
+      secilenKoleksiyon,
+    );
+
+    if (tumListe.isEmpty) {
       AppLogger.warning('[CareerMode] Veri kaynağına ulaşılamadı, boş liste dönülüyor');
       return [];
     }
 
-    final tumListe = snap.docs
-        .map((d) => KariyerFutbolcu.fromDoc(d))
-        .where((f) => f.isim.isNotEmpty && f.kariyerYolu.isNotEmpty)
-        .toList();
-
     AppLogger.info(
-        '[CareerMode] ${tumListe.length} kariyer futbolcu hazır (zorluk: $zorluk)');
+      '[CareerMode] ${tumListe.length} kariyer futbolcu hazır '
+      '(kaynak: Firestore, koleksiyon: $secilenKoleksiyon, '
+      'aktif: ${fetched.aktif.length}, emekli: ${fetched.emekli.length}, '
+      'zorluk: $zorluk)',
+    );
 
-    if (zorluk == 'karışık') return tumListe;
-    return tumListe.where((f) => f.zorluk == zorluk).toList();
+    return _applyZorlukFilter(tumListe, zorluk);
   }
 
-  /// Normalizes a player name for fuzzy comparison:
-  /// - lowercases
-  /// - replaces Turkish characters (ç→c, ğ→g, ı→i, ö→o, ş→s, ü→u)
-  /// - replaces accented Latin characters (á,à,ä,â→a; é,è,ë,ê→e; etc.)
-  /// - collapses extra whitespace
+  static Future<Box> _openCacheBox() async {
+    if (!Hive.isBoxOpen(AppConstants.kariyerFutbolcularCacheBox)) {
+      await Hive.openBox(AppConstants.kariyerFutbolcularCacheBox);
+    }
+    return Hive.box(AppConstants.kariyerFutbolcularCacheBox);
+  }
+
+  static List<KariyerFutbolcu> _readCachedList(Box box, String key) {
+    final raw = box.get(key);
+    if (raw is! List) return [];
+
+    return raw
+        .whereType<Map>()
+        .map((item) => KariyerFutbolcu.fromMap(Map<String, dynamic>.from(item)))
+        .where((f) => f.isim.isNotEmpty && f.kariyerYolu.isNotEmpty)
+        .toList();
+  }
+
+  static Future<void> _writeCachedList(
+    Box box,
+    String key,
+    List<KariyerFutbolcu> futbolcular,
+  ) async {
+    await box.put(key, futbolcular.map((f) => f.toMap()).toList());
+  }
+
+  static bool _isCacheReady(
+    String koleksiyonTipi,
+    List<KariyerFutbolcu> aktif,
+    List<KariyerFutbolcu> emekli,
+  ) {
+    switch (koleksiyonTipi) {
+      case 'aktif':
+        return aktif.isNotEmpty;
+      case 'veteran':
+        return emekli.isNotEmpty;
+      case 'karışık':
+        return aktif.isNotEmpty && emekli.isNotEmpty;
+      default:
+        return aktif.isNotEmpty && emekli.isNotEmpty;
+    }
+  }
+
+  static List<KariyerFutbolcu> _mergeByKoleksiyon(
+    List<KariyerFutbolcu> aktif,
+    List<KariyerFutbolcu> emekli,
+    String koleksiyonTipi,
+  ) {
+    switch (koleksiyonTipi) {
+      case 'aktif':
+        return List<KariyerFutbolcu>.from(aktif);
+      case 'veteran':
+        return List<KariyerFutbolcu>.from(emekli);
+      default:
+        return [...aktif, ...emekli];
+    }
+  }
+
+  static List<KariyerFutbolcu> _applyZorlukFilter(
+    List<KariyerFutbolcu> liste,
+    String zorluk,
+  ) {
+    if (zorluk == 'karışık') return liste;
+    return liste.where((f) => f.zorluk == zorluk).toList();
+  }
+
+  static Future<void> _writeCacheFromFetch(
+    Box box,
+    ({List<KariyerFutbolcu> aktif, List<KariyerFutbolcu> emekli}) fetched,
+  ) async {
+    if (fetched.aktif.isNotEmpty) {
+      await _writeCachedList(box, _cacheKeyAktif, fetched.aktif);
+    }
+    if (fetched.emekli.isNotEmpty) {
+      await _writeCachedList(box, _cacheKeyEmekli, fetched.emekli);
+    }
+  }
+
+  static int? _readLocalPlayersVersion(Box box) {
+    final raw = box.get(_cacheKeyMetaVersion);
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse(raw?.toString() ?? '');
+  }
+
+  static Future<void> _writeLocalPlayersVersion(Box box, int version) async {
+    await box.put(_cacheKeyMetaVersion, version);
+  }
+
+  /// Firestore'daki `game_configs/default_match_config.career_players_meta` alanını okur.
+  /// Futbolcu verisi güncellendiğinde bu değer artırılmalıdır.
+  static Future<int?> _fetchRemotePlayersVersion() async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection(_configCollection)
+          .doc(_matchConfigDocumentId)
+          .get(const GetOptions(source: Source.server));
+
+      if (!doc.exists || doc.data() == null) return null;
+
+      final rawVersion = doc.data()![_playersVersionField];
+      if (rawVersion is num) return rawVersion.toInt();
+      return int.tryParse(rawVersion?.toString() ?? '');
+    } catch (e, stackTrace) {
+      AppLogger.error(
+        '[CareerMode] default_match_config.$_playersVersionField okunamadı',
+        e,
+        stackTrace,
+      );
+      return null;
+    }
+  }
+
+  static void _refreshCacheInBackground() {
+    AppLogger.info('[CareerMode] Firestore background refresh başladı');
+    unawaited(
+      _runBackgroundRefresh().catchError((Object e, StackTrace stackTrace) {
+        AppLogger.error(
+          '[CareerMode] Firestore background refresh başarısız',
+          e,
+          stackTrace,
+        );
+      }),
+    );
+  }
+
+  static Future<void> _runBackgroundRefresh() async {
+    final remoteVersion = await _fetchRemotePlayersVersion();
+    if (remoteVersion == null) {
+      AppLogger.info(
+        '[CareerMode] Firestore background refresh atlandı '
+        '(default_match_config.$_playersVersionField bulunamadı)',
+      );
+      return;
+    }
+
+    final box = await _openCacheBox();
+    final localVersion = _readLocalPlayersVersion(box);
+
+    if (localVersion == remoteVersion) {
+      AppLogger.info(
+        '[CareerMode] Firestore background refresh atlandı '
+        '(veri güncel, version: $remoteVersion)',
+      );
+      return;
+    }
+
+    if (localVersion == null) {
+      await _writeLocalPlayersVersion(box, remoteVersion);
+      AppLogger.info(
+        '[CareerMode] Firestore background refresh atlandı '
+        '(veri güncel, version eşitlendi: $remoteVersion)',
+      );
+      return;
+    }
+
+    AppLogger.info(
+      '[CareerMode] Firestore veri güncellemesi algılandı '
+      '(local: $localVersion, remote: $remoteVersion)',
+    );
+
+    final fetched = await _fetchBothCollectionsFromFirestore();
+    if (fetched.aktif.isEmpty && fetched.emekli.isEmpty) {
+      AppLogger.warning(
+        '[CareerMode] Firestore background refresh veri döndürmedi',
+      );
+      return;
+    }
+
+    await _writeCacheFromFetch(box, fetched);
+    await _writeLocalPlayersVersion(box, remoteVersion);
+    AppLogger.info('[CareerMode] Firestore cache güncellendi');
+  }
+
+  static Future<({List<KariyerFutbolcu> aktif, List<KariyerFutbolcu> emekli})>
+      _fetchFromFirestore(String koleksiyonTipi) async {
+    QuerySnapshot<Map<String, dynamic>>? aktifSnap;
+    QuerySnapshot<Map<String, dynamic>>? emekliSnap;
+
+    switch (koleksiyonTipi) {
+      case 'aktif':
+        aktifSnap = await _getCollectionSnapshot(_aktifKoleksiyon);
+        break;
+      case 'veteran':
+        emekliSnap = await _getCollectionSnapshot(_emekliKoleksiyon);
+        break;
+      case 'karışık':
+        final results = await Future.wait([
+          _getCollectionSnapshot(_aktifKoleksiyon),
+          _getCollectionSnapshot(_emekliKoleksiyon),
+        ]);
+        aktifSnap = results[0];
+        emekliSnap = results[1];
+        break;
+      default:
+        AppLogger.warning(
+          '[CareerMode] Bilinmeyen koleksiyon tipi: $koleksiyonTipi, karışık kullanılıyor',
+        );
+        final results = await Future.wait([
+          _getCollectionSnapshot(_aktifKoleksiyon),
+          _getCollectionSnapshot(_emekliKoleksiyon),
+        ]);
+        aktifSnap = results[0];
+        emekliSnap = results[1];
+        break;
+    }
+
+    return (
+      aktif: aktifSnap != null
+          ? _parseFutbolcular(aktifSnap, 'aktif_')
+          : <KariyerFutbolcu>[],
+      emekli: emekliSnap != null
+          ? _parseFutbolcular(emekliSnap, 'emekli_')
+          : <KariyerFutbolcu>[],
+    );
+  }
+
+  static Future<({List<KariyerFutbolcu> aktif, List<KariyerFutbolcu> emekli})>
+      _fetchBothCollectionsFromFirestore() async {
+    final results = await Future.wait([
+      _getCollectionSnapshot(_aktifKoleksiyon),
+      _getCollectionSnapshot(_emekliKoleksiyon),
+    ]);
+
+    final aktifSnap = results[0];
+    final emekliSnap = results[1];
+
+    return (
+      aktif: aktifSnap != null
+          ? _parseFutbolcular(aktifSnap, 'aktif_')
+          : <KariyerFutbolcu>[],
+      emekli: emekliSnap != null
+          ? _parseFutbolcular(emekliSnap, 'emekli_')
+          : <KariyerFutbolcu>[],
+    );
+  }
+
+  static Future<QuerySnapshot<Map<String, dynamic>>?> _getCollectionSnapshot(
+    String collectionName,
+  ) async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection(collectionName)
+          .get(const GetOptions(source: Source.server));
+      AppLogger.info(
+        '[CareerMode] $collectionName sunucudan ${snap.docs.length} döküman çekildi',
+      );
+      return snap;
+    } catch (serverErr) {
+      AppLogger.warning(
+        '[CareerMode] $collectionName sunucuya ulaşılamadı, Firestore cache deneniyor: $serverErr',
+      );
+      try {
+        final snap = await FirebaseFirestore.instance
+            .collection(collectionName)
+            .get(const GetOptions(source: Source.cache));
+        AppLogger.info(
+          '[CareerMode] $collectionName Firestore cache\'den ${snap.docs.length} döküman çekildi',
+        );
+        return snap;
+      } catch (cacheErr) {
+        AppLogger.error(
+          '[CareerMode] $collectionName Firestore cache de başarısız',
+          cacheErr,
+        );
+        return null;
+      }
+    }
+  }
+
+  static List<KariyerFutbolcu> _parseFutbolcular(
+    QuerySnapshot<Map<String, dynamic>> snap,
+    String idPrefix,
+  ) {
+    return snap.docs
+        .map((d) => KariyerFutbolcu.fromDoc(d, idPrefix: idPrefix))
+        .where((f) => f.isim.isNotEmpty && f.kariyerYolu.isNotEmpty)
+        .toList();
+  }
+
+  /// Takım adı karşılaştırması için isim normalizasyonu.
   static String normalizePlayerName(String text) {
     return text
         .toLowerCase()
@@ -75,55 +382,6 @@ class CareerModeService {
         .replaceAll('ł', 'l')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
-  }
-
-  /// Returns 'dogru', 'yakin', or 'yanlis' based on how close
-  /// the user's guess is to the correct answer.
-  ///
-  /// Rules:
-  /// - Input shorter than 4 characters → always 'yanlis'
-  /// - Normalized exact match → 'dogru'
-  /// - Single word (≥5 chars) exactly matching any word in the answer → 'dogru'
-  /// - Levenshtein similarity ≥ 0.82 (full name or any single word) → 'dogru'
-  /// - Levenshtein similarity ≥ 0.60 (full name or any single word) → 'yakin'
-  /// - Otherwise → 'yanlis'
-  static String checkGuess(String guess, String answer) {
-    final normGuess = normalizePlayerName(guess);
-    final normAnswer = normalizePlayerName(answer);
-
-    if (normGuess.length < 4) return 'yanlis';
-    if (normGuess == normAnswer) return 'dogru';
-
-    final answerWords = normAnswer.split(' ');
-
-    // Single-word match: accepts well-known surnames / mono-name players
-    if (normGuess.length >= 5) {
-      for (final word in answerWords) {
-        if (word == normGuess) return 'dogru';
-      }
-    }
-
-    // Full-name fuzzy similarity
-    final fullScore = _similarityScore(normGuess, normAnswer);
-    if (fullScore >= 0.82) return 'dogru';
-
-    // Word-by-word fuzzy similarity
-    for (final word in answerWords) {
-      if (_similarityScore(normGuess, word) >= 0.82) return 'dogru';
-    }
-
-    // Close but not correct
-    if (fullScore >= 0.60) return 'yakin';
-    for (final word in answerWords) {
-      if (_similarityScore(normGuess, word) >= 0.60) return 'yakin';
-    }
-
-    return 'yanlis';
-  }
-
-  /// Legacy wrapper kept for API compatibility — delegates to [checkGuess].
-  static bool isCorrectGuess(String guess, String answer) {
-    return checkGuess(guess, answer) == 'dogru';
   }
 
   // ── Şık üretimi ──────────────────────────────────────────────────────────
@@ -168,19 +426,21 @@ class CareerModeService {
         secilenIsimler.add(f.isim);
         if (kDebugMode) {
           AppLogger.info(
-              '[CareerMode][ŞIK][$asama] ${f.isim} | '
-              'son: ${f.kariyerYolu.isNotEmpty ? f.kariyerYolu.last : "-"} | '
-              'zorluk: ${f.zorluk}');
+            '[CareerMode][ŞIK][$asama] ${f.isim} | '
+            'son: ${f.kariyerYolu.isNotEmpty ? f.kariyerYolu.last : "-"} | '
+            'zorluk: ${f.zorluk}',
+          );
         }
       }
     }
 
     if (kDebugMode) {
       AppLogger.info(
-          '[CareerMode][ŞIK] ── Yeni kart ──────────────────────────\n'
-          '  Doğru oyuncu : ${dogru.isim}\n'
-          '  Zorluk       : $dogruZorluk\n'
-          '  Son takım    : ${dogru.kariyerYolu.isNotEmpty ? dogru.kariyerYolu.last : "-"}');
+        '[CareerMode][ŞIK] ── Yeni kart ──────────────────────────\n'
+        '  Doğru oyuncu : ${dogru.isim}\n'
+        '  Zorluk       : $dogruZorluk\n'
+        '  Son takım    : ${dogru.kariyerYolu.isNotEmpty ? dogru.kariyerYolu.last : "-"}',
+      );
     }
 
     // Aşama 1: aynı zorluk + aynı son takım
@@ -221,32 +481,4 @@ class CareerModeService {
 
     return sonuc;
   }
-
-  /// Normalized Levenshtein similarity: 1.0 = identical, 0.0 = completely different.
-  static double _similarityScore(String a, String b) {
-    if (a == b) return 1.0;
-    if (a.isEmpty || b.isEmpty) return 0.0;
-    final distance = _levenshtein(a, b);
-    return 1.0 - distance / max(a.length, b.length);
-  }
-
-  static int _levenshtein(String a, String b) {
-    final m = a.length;
-    final n = b.length;
-    final dp = List.generate(m + 1, (_) => List.filled(n + 1, 0));
-    for (int i = 0; i <= m; i++) dp[i][0] = i;
-    for (int j = 0; j <= n; j++) dp[0][j] = j;
-    for (int i = 1; i <= m; i++) {
-      for (int j = 1; j <= n; j++) {
-        if (a[i - 1] == b[j - 1]) {
-          dp[i][j] = dp[i - 1][j - 1];
-        } else {
-          dp[i][j] =
-              1 + [dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]].reduce(min);
-        }
-      }
-    }
-    return dp[m][n];
-  }
-
 }

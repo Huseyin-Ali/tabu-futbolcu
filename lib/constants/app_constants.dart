@@ -4,6 +4,7 @@ class AppConstants {
   static const String gameHistoryBox = 'gameHistory';
   static const String gameBox = 'gameBox';
   static const String futbolcularBox = 'futbolcular';
+  static const String kariyerFutbolcularCacheBox = 'kariyerFutbolcularCache';
   static const String kariyerGecmisKey = 'kariyerGecmisOyunlar';
 
   // SharedPreferences Keys
@@ -14,6 +15,7 @@ class AppConstants {
   static const String keyTakim1Sirasi = 'takim1Sirasi';
   static const String keyTakim1Ismi = 'takim1Ismi';
   static const String keyTakim2Ismi = 'takim2Ismi';
+  static const String keyTabuKartTipi = 'tabuKartTipi';
   static const String keySesAcik = 'sesAcik';
   static const String keyFutbolcularLastSync = 'futbolcularLastSync';
 
@@ -22,6 +24,7 @@ class AppConstants {
   static const int defaultPasHakki = 3;
   static const int defaultTabuCezasi = 2;
   static const int defaultPuanHedefi = 50;
+  static const String defaultTabuKartTipi = 'karışık';
   static const bool defaultSesAcik = true;
 
   // Oyun Ayarları Limitleri

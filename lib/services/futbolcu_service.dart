@@ -8,6 +8,65 @@ import '../utils/logger.dart';
 
 class FutbolcuService {
   static const String _boxName = AppConstants.futbolcularBox;
+  static const String _aktifKoleksiyon = 'tumAktifFutbolcular';
+  static const String _emekliKoleksiyon = 'tumEmekliFutbolcular';
+
+  static bool _isValidTabuFutbolcu(Futbolcu futbolcu) {
+    return futbolcu.isim.trim().isNotEmpty &&
+        futbolcu.isim != 'Bilinmeyen Futbolcu' &&
+        futbolcu.tabuKelimeler.isNotEmpty;
+  }
+
+  static List<TabuFutbolcu> _mapDocsToTabuFutbolcular(
+    QuerySnapshot snapshot,
+  ) {
+    return snapshot.docs
+        .map((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          data['id'] = doc.id;
+          return TabuFutbolcu.fromMap(data);
+        })
+        .where((f) => f.isim.trim().isNotEmpty && f.tabuKelimeler.isNotEmpty)
+        .toList();
+  }
+
+  static Future<List<Futbolcu>> _fetchAktifTabuFutbolcular() async {
+    final snap = await FirebaseFirestore.instance
+        .collection(_aktifKoleksiyon)
+        .get(const GetOptions(source: Source.serverAndCache));
+
+    return snap.docs
+        .map((d) => Futbolcu.fromDoc(d, idPrefix: 'aktif_'))
+        .where(_isValidTabuFutbolcu)
+        .toList();
+  }
+
+  static Future<List<TabuFutbolcu>> _fetchAktifTabuFutbolcularForHive() async {
+    final snap = await FirebaseFirestore.instance
+        .collection(_aktifKoleksiyon)
+        .get();
+
+    return _mapDocsToTabuFutbolcular(snap);
+  }
+
+  static Future<List<Futbolcu>> _fetchEmekliTabuFutbolcular() async {
+    final snap = await FirebaseFirestore.instance
+        .collection(_emekliKoleksiyon)
+        .get(const GetOptions(source: Source.serverAndCache));
+
+    return snap.docs
+        .map((d) => Futbolcu.fromDoc(d, idPrefix: 'emekli_'))
+        .where(_isValidTabuFutbolcu)
+        .toList();
+  }
+
+  static Future<List<TabuFutbolcu>> _fetchEmekliTabuFutbolcularForHive() async {
+    final snap = await FirebaseFirestore.instance
+        .collection(_emekliKoleksiyon)
+        .get();
+
+    return _mapDocsToTabuFutbolcular(snap);
+  }
 
   /// Offline-first mantığı: Önce Hive'dan oku, sonra güncellemeleri çek
   static Future<List<TabuFutbolcu>> getFutbolcular() async {
@@ -32,22 +91,23 @@ class FutbolcuService {
       lastSync = DateTime.fromMillisecondsSinceEpoch(lastSyncMillis);
     }
 
-    // 3. Firestore'dan aktif futbolcuları çek (arka planda)
+    // 3. Firestore'dan aktif ve emekli futbolcuları çek (arka planda)
     // Not: updatedAt kontrolü client-side'da yapılıyor (index gereksinimini önlemek için)
     try {
-      final QuerySnapshot snapshot = await FirebaseFirestore.instance
-          .collection('futbolcular')
-          .where('durum', isEqualTo: 'aktif')
-          .get();
+      final snapshots = await Future.wait<List<TabuFutbolcu>>([
+        _fetchAktifTabuFutbolcularForHive(),
+        _fetchEmekliTabuFutbolcularForHive(),
+      ]);
 
-      if (snapshot.docs.isNotEmpty) {
-        // Tüm aktif futbolcuları al
-        final allFutbolcular = snapshot.docs.map((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          data['id'] = doc.id; // ID'yi ekle (güncelleme için)
-          return TabuFutbolcu.fromMap(data);
-        }).toList();
+      final aktifFutbolcular = snapshots[0];
+      final emekliFutbolcular = snapshots[1];
 
+      final allFutbolcular = [
+        ...aktifFutbolcular,
+        ...emekliFutbolcular,
+      ];
+
+      if (allFutbolcular.isNotEmpty) {
         // Client-side'da updatedAt kontrolü yap (index gereksinimini önler)
         List<TabuFutbolcu> updatedFutbolcular;
         if (lastSync != null) {
@@ -55,12 +115,14 @@ class FutbolcuService {
             return futbolcu.sonGuncelleme.isAfter(lastSync!);
           }).toList();
         } else {
-          // İlk senkronizasyon: Tüm aktif futbolcuları al
+          // İlk senkronizasyon: Tüm futbolcuları al
           updatedFutbolcular = allFutbolcular;
         }
 
         if (updatedFutbolcular.isNotEmpty) {
-          AppLogger.info('Firestore\'dan ${updatedFutbolcular.length} güncellenmiş futbolcu çekildi (toplam ${allFutbolcular.length} aktif)');
+          AppLogger.info(
+              'Firestore\'dan ${updatedFutbolcular.length} güncellenmiş futbolcu çekildi '
+              '(toplam ${allFutbolcular.length}: aktif + emekli)');
 
         // Hive'da güncelle veya ekle
         for (final futbolcu in updatedFutbolcular) {
@@ -105,15 +167,17 @@ class FutbolcuService {
     if (cachedFutbolcular.isEmpty) {
       AppLogger.info('İlk açılış: Tüm futbolcular Firestore\'dan çekiliyor');
       try {
-        final QuerySnapshot snapshot = await FirebaseFirestore.instance
-            .collection('futbolcular')
-            .where('durum', isEqualTo: 'aktif')
-            .get();
+        final snapshots = await Future.wait<List<TabuFutbolcu>>([
+          _fetchAktifTabuFutbolcularForHive(),
+          _fetchEmekliTabuFutbolcularForHive(),
+        ]);
 
-        final futbolcular = snapshot.docs.map((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          return TabuFutbolcu.fromMap(data);
-        }).toList();
+        final aktifFutbolcular = snapshots[0];
+        final emekliFutbolcular = snapshots[1];
+        final futbolcular = [
+          ...aktifFutbolcular,
+          ...emekliFutbolcular,
+        ];
 
         // Hive'a kaydet
         await box.clear();
@@ -154,14 +218,50 @@ class FutbolcuService {
   }
 
   /// Production-ready: Doc ID ile takip, validation, cache desteği
-  static Future<List<Futbolcu>> getFutbolcularProduction() async {
+  static Future<List<Futbolcu>> getFutbolcularProduction({
+    String koleksiyonTipi = 'karışık',
+  }) async {
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('futbolcular')
-          .where('durum', isEqualTo: 'aktif')
-          .get(const GetOptions(source: Source.serverAndCache));
+      final secilenKoleksiyon = koleksiyonTipi.toLowerCase().trim();
 
-      return snap.docs.map((d) => Futbolcu.fromDoc(d)).toList();
+      List<Futbolcu> aktifFutbolcular = [];
+      List<Futbolcu> emekliFutbolcular = [];
+
+      switch (secilenKoleksiyon) {
+        case 'aktif':
+          aktifFutbolcular = await _fetchAktifTabuFutbolcular();
+          break;
+        case 'veteran':
+          emekliFutbolcular = await _fetchEmekliTabuFutbolcular();
+          break;
+        case 'karışık':
+          final results = await Future.wait([
+            _fetchAktifTabuFutbolcular(),
+            _fetchEmekliTabuFutbolcular(),
+          ]);
+          aktifFutbolcular = results[0];
+          emekliFutbolcular = results[1];
+          break;
+        default:
+          AppLogger.warning(
+              '[Tabu] Bilinmeyen kart tipi: $koleksiyonTipi, karışık kullanılıyor');
+          final results = await Future.wait([
+            _fetchAktifTabuFutbolcular(),
+            _fetchEmekliTabuFutbolcular(),
+          ]);
+          aktifFutbolcular = results[0];
+          emekliFutbolcular = results[1];
+          break;
+      }
+
+      final tumListe = [...aktifFutbolcular, ...emekliFutbolcular];
+
+      AppLogger.info(
+          'Tabu modu: ${tumListe.length} futbolcu '
+          '(kart tipi: $secilenKoleksiyon, aktif: ${aktifFutbolcular.length}, '
+          'emekli: ${emekliFutbolcular.length})');
+
+      return tumListe;
     } catch (e, stackTrace) {
       AppLogger.error('Futbolcular yüklenirken hata oluştu', e, stackTrace);
       return [];

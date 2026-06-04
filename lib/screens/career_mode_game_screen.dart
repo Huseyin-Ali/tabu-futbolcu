@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
 import '../models/kariyer_futbolcu.dart';
 import '../services/career_mode_service.dart';
+import '../services/match_director_service.dart';
 import '../utils/logger.dart';
 import 'career_mode_result_screen.dart';
 import 'welcome_screen.dart';
@@ -14,11 +15,13 @@ import 'welcome_screen.dart';
 class CareerModeGameScreen extends StatefulWidget {
   final int sure;
   final String zorluk;
+  final String koleksiyonTipi;
 
   const CareerModeGameScreen({
     super.key,
     required this.sure,
     required this.zorluk,
+    this.koleksiyonTipi = 'karışık',
   });
 
   @override
@@ -55,11 +58,14 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   int _hintedCorrectCount = 0;
 
   // Risk animasyonları
-  late AnimationController _popupEntryCtrl;  // popup giriş (300ms)
-  late AnimationController _pulseCtrl;       // popup glow pulse (1400ms, repeat)
-  late AnimationController _shakeCtrl;       // screen shake (220ms)
-  late AnimationController _scoreFloatCtrl;  // floating +N (700ms)
-  late AnimationController _flashCtrl;       // kırmızı flash (350ms)
+  late AnimationController _popupEntryCtrl;
+  late AnimationController _pulseCtrl;
+  late AnimationController _shakeCtrl;
+  late AnimationController _scoreFloatCtrl;
+  late AnimationController _flashCtrl;
+  // Blitz animasyonları
+  late AnimationController _blitzIntroCtrl;  // intro banner (700ms)
+  late AnimationController _blitzPulseCtrl;  // arka plan glow (900ms, repeat)
 
   late Animation<double> _popupScale;
   late Animation<double> _popupFade;
@@ -68,11 +74,28 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   late Animation<double> _scoreFloatFade;
   late Animation<Offset> _scoreFloatSlide;
   late Animation<double> _flashOpacity;
+  late Animation<double> _blitzIntroScale;
+  late Animation<double> _blitzIntroFade;
+  late Animation<double> _blitzPulseAnim;
 
   String _floatingScoreText = '';
   bool _showFlash = false;
+  bool _showBlitzIntro = false;
 
   AudioPlayer? _riskAudioPlayer;
+  AudioPlayer? _blitzAudioPlayer;
+
+  // Blitz sistemi
+  static const int _blitzDuration = 15;
+  static const int _blitzBonus = 2;
+  static const int _blitzCooldown = 10; // min kart aralığı
+
+  bool _isBlitzMode = false;
+  int _blitzRemainingSeconds = 0;
+  int _lastBlitzTriggerIndex = -20;
+  int _blitzTriggerCount = 0;
+  int _blitzCorrectCount = 0;
+  int _blitzBonusScore = 0;
 
   // Risk kartı sistemi
   bool _isRiskKarti = false;
@@ -182,6 +205,27 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
         vsync: this, duration: const Duration(milliseconds: 350));
     _flashOpacity = Tween<double>(begin: 0.40, end: 0.0).animate(
         CurvedAnimation(parent: _flashCtrl, curve: Curves.easeOut));
+
+    // Blitz intro banner animasyonu
+    _blitzIntroCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1500));
+    _blitzIntroScale = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.4, end: 1.1), weight: 25),
+      TweenSequenceItem(tween: Tween(begin: 1.1, end: 1.0), weight: 15),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.0), weight: 25),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.85), weight: 35),
+    ]).animate(_blitzIntroCtrl);
+    _blitzIntroFade = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 20),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.0), weight: 40),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 40),
+    ]).animate(_blitzIntroCtrl);
+
+    // Blitz arka plan pulse
+    _blitzPulseCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 900));
+    _blitzPulseAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+        CurvedAnimation(parent: _blitzPulseCtrl, curve: Curves.easeInOut));
   }
 
   @override
@@ -192,14 +236,22 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     _shakeCtrl.dispose();
     _scoreFloatCtrl.dispose();
     _flashCtrl.dispose();
+    _blitzIntroCtrl.dispose();
+    _blitzPulseCtrl.dispose();
     _riskAudioPlayer?.dispose();
+    _blitzAudioPlayer?.dispose();
     super.dispose();
   }
 
   Future<void> _yukleFutbolcular() async {
-    final liste = await CareerModeService.getKariyerFutbolculari(
-      zorluk: widget.zorluk,
-    );
+    final results = await Future.wait([
+      CareerModeService.getKariyerFutbolculari(
+        zorluk: widget.zorluk,
+        koleksiyonTipi: widget.koleksiyonTipi,
+      ),
+      MatchDirectorService.loadConfig(),
+    ]);
+    final liste = results[0] as List<KariyerFutbolcu>;
 
     if (!mounted) return;
 
@@ -230,12 +282,65 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       setState(() {
         if (_kalanSure > 0) {
           _kalanSure--;
+          // Blitz geri sayım
+          if (_isBlitzMode) {
+            _blitzRemainingSeconds--;
+            if (_blitzRemainingSeconds <= 0) {
+              _endBlitzMode();
+            }
+          }
         } else {
           t.cancel();
           _oyunuBitir();
         }
       });
     });
+  }
+
+  void _startBlitzMode() {
+    if (_isBlitzMode || _oyunBitti) return;
+    _blitzTriggerCount++;
+    _lastBlitzTriggerIndex = _kartIndex;
+    setState(() {
+      _isBlitzMode = true;
+      _blitzRemainingSeconds = _blitzDuration;
+      _showBlitzIntro = true;
+    });
+    _blitzIntroCtrl.forward(from: 0.0).then((_) {
+      if (mounted) setState(() => _showBlitzIntro = false);
+    });
+    _blitzPulseCtrl.repeat(reverse: true);
+    _playBlitzSound();
+    if (kDebugMode) {
+      AppLogger.info(
+        '[Blitz] BLITZ MODE başladı! combo: $_comboCount | '
+        'trigger#: $_blitzTriggerCount',
+      );
+    }
+  }
+
+  void _endBlitzMode() {
+    if (!_isBlitzMode) return;
+    _blitzPulseCtrl.stop();
+    _blitzPulseCtrl.reset();
+    setState(() {
+      _isBlitzMode = false;
+      _blitzRemainingSeconds = 0;
+    });
+    if (kDebugMode) {
+      AppLogger.info(
+        '[Blitz] Blitz bitti! doğru: $_blitzCorrectCount | '
+        'bonus: $_blitzBonusScore',
+      );
+    }
+  }
+
+  void _playBlitzSound() async {
+    try {
+      _blitzAudioPlayer?.dispose();
+      _blitzAudioPlayer = AudioPlayer();
+      await _blitzAudioPlayer!.play(AssetSource('sounds/blitz_start.mp3.mp3'));
+    } catch (_) {}
   }
 
   void _sonrakiKart() {
@@ -253,11 +358,11 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
     _kartIndex++;
 
-    // Risk kartı kararı: min 5 normal kart, %15 ihtimal, üst üste gelmesin
+    // Risk kartı kararı: min 5 normal kart, config spawn oranı, üst üste gelmesin
     final riskMumkun = _kartIndex >= 5 &&
         (_kartIndex - _lastRiskKartiIndex) >= 5;
     final bool riskOlsun =
-        riskMumkun && Random().nextDouble() < 0.15;
+        riskMumkun && MatchDirectorService.shouldSpawnRiskCard();
 
     if (riskOlsun) {
       _lastRiskKartiIndex = _kartIndex;
@@ -371,6 +476,12 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           }
         } else {
           _skor += 1;
+          // Blitz bonusu
+          if (_isBlitzMode) {
+            _skor += _blitzBonus;
+            _blitzCorrectCount++;
+            _blitzBonusScore += _blitzBonus;
+          }
           _comboCount++;
           if (_comboCount > _maxCombo) _maxCombo = _comboCount;
           final threshold = _comboBonusThreshold;
@@ -380,7 +491,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
             _bonusScore++;
             _currentLives++;
             _canKazanildi = true;
-            _geribildrim = 'dogru_bonus';
+            _geribildrim = _isBlitzMode ? 'dogru_blitz_bonus' : 'dogru_bonus';
             Future.delayed(const Duration(milliseconds: 1400), () {
               if (mounted) setState(() => _canKazanildi = false);
             });
@@ -391,11 +502,18 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
               );
             }
           } else {
-            _geribildrim = 'dogru';
+            _geribildrim = _isBlitzMode ? 'dogru_blitz' : 'dogru';
           }
           if (kDebugMode) {
             AppLogger.info(
-              '[Combo] combo: $_comboCount/$threshold | maxCombo: $_maxCombo',
+              '[Combo] combo: $_comboCount/$threshold | maxCombo: $_maxCombo'
+              '${_isBlitzMode ? ' | ⚡ BLITZ +$_blitzBonus' : ''}',
+            );
+          }
+          // Floating score: Blitz modunda ⚡+3 göster
+          if (_isBlitzMode) {
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _triggerFloatingScore('⚡+${1 + _blitzBonus}'),
             );
           }
         }
@@ -412,10 +530,24 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       }
     });
 
+    // Blitz tetikleme: normal doğru cevap, combo >= 5, cooldown tamam
+    if (dogru && !wasRiskCard && !_kartIpucuAcik && !_isBlitzMode &&
+        _comboCount >= 5 &&
+        (_kartIndex - _lastBlitzTriggerIndex) >= _blitzCooldown) {
+      if (MatchDirectorService.shouldSpawnBlitz()) {
+        Future.delayed(const Duration(milliseconds: 960), () {
+          if (mounted && !_oyunBitti) _startBlitzMode();
+        });
+        if (kDebugMode) {
+          AppLogger.info('[Blitz] Blitz tetiklendi! combo: $_comboCount');
+        }
+      }
+    }
+
     final delay = dogru ? 900 : 1300;
     Future.delayed(Duration(milliseconds: delay), () {
       if (!mounted || _oyunBitti) return;
-      // Risk kartında can gitmediğinden sadece normal kart yanlışında kontrol et
+      if (wasRiskCard) _stopRiskSound();
       if (!wasRiskCard && _currentLives <= 0) {
         if (kDebugMode) AppLogger.info('[Game] Can bitti → oyun sona eriyor');
         _oyunuBitir();
@@ -432,11 +564,22 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     _playRiskSound();
   }
 
+  void _stopRiskSound() {
+    try {
+      final p = _riskAudioPlayer;
+      _riskAudioPlayer = null;
+      p?.stop();
+      p?.dispose();
+    } catch (_) {}
+  }
+
   void _playRiskSound() async {
     try {
-      _riskAudioPlayer?.dispose();
-      _riskAudioPlayer = AudioPlayer();
-      await _riskAudioPlayer!.play(AssetSource('sounds/whistle.mp3'));
+      _stopRiskSound();
+      final player = AudioPlayer();
+      _riskAudioPlayer = player;
+      await player.setReleaseMode(ReleaseMode.loop);
+      await player.play(AssetSource('sounds/risk_v1.mp3'));
     } catch (_) {}
   }
 
@@ -472,6 +615,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
   void _riskPasGec() {
     if (!_riskPopupGosteriliyor) return;
+    _stopRiskSound();
     _stopRiskAnimations();
     if (kDebugMode) AppLogger.info('[Risk] Kullanıcı pas geçti');
     setState(() {
@@ -494,6 +638,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
   void _oyunuBitir() {
     if (_oyunBitti) return;
+    _stopRiskSound();
     _timer?.cancel();
     setState(() => _oyunBitti = true);
 
@@ -530,6 +675,9 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           lostRiskCount: _lostRiskCount,
           riskScoreGain: _riskScoreGain,
           riskScoreLoss: _riskScoreLoss,
+          blitzTriggerCount: _blitzTriggerCount,
+          blitzCorrectCount: _blitzCorrectCount,
+          blitzBonusScore: _blitzBonusScore,
         ),
       ),
     );
@@ -555,6 +703,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
         builder: (_) => CareerModeGameScreen(
           sure: widget.sure,
           zorluk: widget.zorluk,
+          koleksiyonTipi: widget.koleksiyonTipi,
         ),
       ),
     );
@@ -570,9 +719,9 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   }
 
   Color get _timerColor {
-    // Risk kartı aktifken turuncu
+    if (_isBlitzMode) return const Color(0xFF00E5FF); // cyan blitz
     if (_isRiskKarti && _riskKabulEdildi && _geribildrim == null) {
-      return Colors.orangeAccent;
+      return Colors.orangeAccent; // risk
     }
     final ratio = _kalanSure / widget.sure;
     if (ratio > 0.5) return Colors.greenAccent;
@@ -626,7 +775,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
                 const Icon(Icons.search_off, color: Colors.white54, size: 64),
                 const SizedBox(height: 16),
                 const Text(
-                  'Bu zorluk için kariyer yolu olan\nfutbolcu bulunamadı.',
+                  'Seçilen ayarlar için kariyer yolu olan\nfutbolcu bulunamadı.',
                   style: TextStyle(color: Colors.white, fontSize: 16),
                   textAlign: TextAlign.center,
                 ),
@@ -655,6 +804,28 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           Positioned.fill(
             child: Container(color: Colors.black.withOpacity(0.6)),
           ),
+          // Blitz arka plan glow (hafif cyan pulse)
+          if (_isBlitzMode)
+            AnimatedBuilder(
+              animation: _blitzPulseCtrl,
+              builder: (_, __) => Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        center: Alignment.topCenter,
+                        radius: 1.4,
+                        colors: [
+                          const Color(0xFF00E5FF)
+                              .withOpacity(0.04 + _blitzPulseAnim.value * 0.05),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           // Kırmızı flash overlay
           if (_showFlash)
             AnimatedBuilder(
@@ -702,6 +873,8 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           ),
           // Floating score (+N)
           if (_floatingScoreText.isNotEmpty) _buildFloatingScore(),
+          // Blitz intro banner
+          if (_showBlitzIntro) _buildBlitzIntro(),
           // Risk kartı popup
           if (_riskPopupGosteriliyor) _buildRiskPopup(),
           // Pause overlay
@@ -773,10 +946,12 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
             ],
           ),
           const SizedBox(height: 5),
-          // ── Satır 2: Can ❤️❤️❤️ | Combo 🔥
+          // ── Satır 2: Can ❤️❤️❤️ | Blitz geri sayım | Combo 🔥
           Row(
             children: [
               _buildLivesRow(),
+              const Spacer(),
+              if (_isBlitzMode) _buildBlitzCountdown(),
               const Spacer(),
               _buildComboBadge(),
             ],
@@ -936,7 +1111,9 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
         _geribildrim == 'dogru_bonus' ||
         _geribildrim == 'dogru_ipucu' ||
         _geribildrim == 'dogru_risk' ||
-        _geribildrim == 'dogru_risk_bonus') borderColor = Colors.greenAccent;
+        _geribildrim == 'dogru_risk_bonus' ||
+        _geribildrim == 'dogru_blitz' ||
+        _geribildrim == 'dogru_blitz_bonus') borderColor = Colors.greenAccent;
     if (_geribildrim == 'yanlis') borderColor = Colors.redAccent;
     if (_geribildrim == 'yanlis_risk') borderColor = Colors.orangeAccent;
 
@@ -1087,6 +1264,26 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
                 style: TextStyle(
                   color: Colors.greenAccent,
                   fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              )
+            else if (_geribildrim == 'dogru_blitz')
+              Text(
+                '⚡  Doğru!  +${1 + _blitzBonus} Blitz Bonus',
+                style: const TextStyle(
+                  color: Color(0xFF00E5FF),
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              )
+            else if (_geribildrim == 'dogru_blitz_bonus')
+              Text(
+                '⚡  Doğru!  +${1 + _blitzBonus}  🔥  +1 Combo Bonus',
+                style: const TextStyle(
+                  color: Color(0xFF00E5FF),
+                  fontSize: 13,
                   fontWeight: FontWeight.bold,
                 ),
                 textAlign: TextAlign.center,
@@ -1285,6 +1482,121 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   }
 
   // ── Pause overlay ─────────────────────────────────────────────────────────
+
+  // ── Blitz UI ──────────────────────────────────────────────────────────────
+
+  Widget _buildBlitzIntro() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: Center(
+          child: AnimatedBuilder(
+            animation: _blitzIntroCtrl,
+            builder: (_, __) => Opacity(
+              opacity: _blitzIntroFade.value,
+              child: Transform.scale(
+                scale: _blitzIntroScale.value,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 28, vertical: 14),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF003D4D), Color(0xFF001A22)],
+                    ),
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                        color: const Color(0xFF00E5FF).withOpacity(0.7),
+                        width: 1.5),
+                    boxShadow: const [
+                      BoxShadow(
+                          color: Color(0x9900E5FF),
+                          blurRadius: 40,
+                          spreadRadius: -6),
+                      BoxShadow(
+                          color: Color(0x4400BCD4),
+                          blurRadius: 80,
+                          spreadRadius: -20),
+                    ],
+                  ),
+                  child: const Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '⚡ BLITZ MODE ⚡',
+                        style: TextStyle(
+                          color: Color(0xFF00E5FF),
+                          fontSize: 26,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 2,
+                          shadows: [
+                            Shadow(
+                                color: Color(0xAA00E5FF), blurRadius: 16),
+                            Shadow(
+                                color: Color(0x5500BCD4), blurRadius: 40),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        '15 saniye • +3 puan',
+                        style: TextStyle(
+                          color: Color(0x9900E5FF),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBlitzCountdown() {
+    return AnimatedBuilder(
+      animation: _blitzPulseCtrl,
+      builder: (_, __) {
+        final glow = 0.5 + _blitzPulseAnim.value * 0.5;
+        return Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: const Color(0xFF00E5FF).withOpacity(0.12),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+                color: const Color(0xFF00E5FF).withOpacity(glow),
+                width: 1.2),
+            boxShadow: [
+              BoxShadow(
+                  color: const Color(0xFF00E5FF).withOpacity(0.15 * glow),
+                  blurRadius: 10,
+                  spreadRadius: -3),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('⚡', style: TextStyle(fontSize: 11)),
+              const SizedBox(width: 4),
+              Text(
+                'BLITZ  ${_blitzRemainingSeconds}s',
+                style: TextStyle(
+                  color: const Color(0xFF00E5FF).withOpacity(glow),
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   // ── Floating score (+N) ───────────────────────────────────────────────────
 

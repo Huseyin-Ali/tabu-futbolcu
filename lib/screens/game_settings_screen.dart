@@ -22,6 +22,13 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
   bool _takim1Sirasi = true;
   String _takim1Ismi = '';
   String _takim2Ismi = '';
+  String _kartTipi = AppConstants.defaultTabuKartTipi;
+
+  static const List<String> _kartTipiSecenekleri = [
+    'aktif',
+    'veteran',
+    'karışık',
+  ];
 
   @override
   void initState() {
@@ -43,6 +50,8 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
       _takim1Sirasi = prefs.getBool(AppConstants.keyTakim1Sirasi) ?? true;
       _takim1Ismi = prefs.getString(AppConstants.keyTakim1Ismi) ?? '';
       _takim2Ismi = prefs.getString(AppConstants.keyTakim2Ismi) ?? '';
+      _kartTipi = prefs.getString(AppConstants.keyTabuKartTipi) ??
+          AppConstants.defaultTabuKartTipi;
     });
   }
 
@@ -55,6 +64,7 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
     await prefs.setBool(AppConstants.keyTakim1Sirasi, _takim1Sirasi);
     await prefs.setString(AppConstants.keyTakim1Ismi, _takim1Ismi);
     await prefs.setString(AppConstants.keyTakim2Ismi, _takim2Ismi);
+    await prefs.setString(AppConstants.keyTabuKartTipi, _kartTipi);
   }
 
   // FittedBox yalnızca kart içindeki kısa metin için — tüm ekran değil.
@@ -112,6 +122,101 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
         ],
       ),
     );
+  }
+
+  Widget _kartTipiSecimi({
+    required double cardGap,
+    required bool isUltraCompact,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(height: cardGap),
+        Text(
+          'Kart Tipi',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: Colors.white.withOpacity(0.9),
+            fontSize: isUltraCompact ? 14 : 16,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.5,
+          ),
+        ),
+        SizedBox(height: cardGap),
+        Row(
+          children: _kartTipiSecenekleri.map((tip) {
+            final selected = _kartTipi == tip;
+            final color = _kartTipiRengi(tip);
+            return Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: tip == _kartTipiSecenekleri.first ? 0 : 4,
+                  right: tip == _kartTipiSecenekleri.last ? 0 : 4,
+                ),
+                child: GestureDetector(
+                  onTap: () => setState(() => _kartTipi = tip),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    alignment: Alignment.center,
+                    padding: EdgeInsets.symmetric(
+                      vertical: isUltraCompact ? 8 : 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? color.withOpacity(0.25)
+                          : Colors.white.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: selected
+                            ? color
+                            : Colors.white.withOpacity(0.3),
+                        width: selected ? 2 : 1,
+                      ),
+                    ),
+                    child: Text(
+                      _kartTipiEtiketi(tip),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: isUltraCompact ? 12 : 14,
+                        fontWeight:
+                            selected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  String _kartTipiEtiketi(String tip) {
+    switch (tip) {
+      case 'aktif':
+        return 'Aktif';
+      case 'veteran':
+        return 'Veteran';
+      case 'karışık':
+        return 'Karışık';
+      default:
+        return tip;
+    }
+  }
+
+  Color _kartTipiRengi(String tip) {
+    switch (tip) {
+      case 'aktif':
+        return Colors.lightBlueAccent;
+      case 'veteran':
+        return Colors.amber;
+      case 'karışık':
+        return Colors.purpleAccent;
+      default:
+        return Colors.white;
+    }
   }
 
   @override
@@ -183,10 +288,11 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
 
                       // ── BÖLGE 2: Kartlar (Expanded) ───────────────────
                       Expanded(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            _ayarCard(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              _ayarCard(
                               label: 'Süre',
                               value: _zamanLimiti,
                               unit: ' sn',
@@ -244,8 +350,13 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
                                       ? _puanHedefi - 5
                                       : 10),
                             ),
+                            _kartTipiSecimi(
+                              cardGap: cardGap,
+                              isUltraCompact: isUltraCompact,
+                            ),
                           ],
                         ),
+                      ),
                       ),
 
                       // ── BÖLGE 3: Buton (her zaman görünür) ───────────
@@ -262,6 +373,7 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
                                   oyuncu2Adi: _takim2Ismi,
                                   turSayisi: 10,
                                   sure: _zamanLimiti,
+                                  kartTipi: _kartTipi,
                                 ),
                               ),
                             );

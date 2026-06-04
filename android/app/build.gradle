@@ -30,7 +30,7 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.example.oyuncu_tahmin_oyunu"
+    namespace = "com.huseyinali.tabufutbolcu"
     compileSdk = 36
     ndkVersion = flutter.ndkVersion
 

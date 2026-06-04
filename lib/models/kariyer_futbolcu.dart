@@ -21,8 +21,56 @@ class KariyerFutbolcu {
     this.dogumYili,
   });
 
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'isim': isim,
+      'kariyer_yolu': kariyerYolu,
+      'zorluk': zorluk,
+      if (ulke != null) 'ulke': ulke,
+      if (pozisyon != null) 'pozisyon': pozisyon,
+      if (dogumYili != null) 'dogum_yili': dogumYili,
+    };
+  }
+
+  factory KariyerFutbolcu.fromMap(Map<String, dynamic> map) {
+    final raw = map['kariyer_yolu'];
+    List<String> kariyerYolu = [];
+    if (raw is List) {
+      kariyerYolu = raw
+          .where((e) => e != null)
+          .map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+    } else if (raw is String && raw.isNotEmpty) {
+      kariyerYolu = raw
+          .split(RegExp(r'[,→\n]'))
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+    }
+
+    final rawDY = map['dogum_yili'] ?? map['dogumYili'];
+    int? dogumYili;
+    if (rawDY != null) {
+      dogumYili = int.tryParse(rawDY.toString());
+    }
+
+    return KariyerFutbolcu(
+      id: (map['id'] ?? '').toString(),
+      isim: (map['isim'] ?? '').toString().trim(),
+      kariyerYolu: kariyerYolu,
+      zorluk: (map['zorluk'] ?? 'orta').toString().toLowerCase().trim(),
+      ulke: map['ulke']?.toString(),
+      pozisyon: map['pozisyon']?.toString(),
+      dogumYili: dogumYili,
+    );
+  }
+
   factory KariyerFutbolcu.fromDoc(
-      QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+    QueryDocumentSnapshot<Map<String, dynamic>> doc, {
+    String? idPrefix,
+  }) {
     final data = doc.data();
 
     final isim = (data['isim'] ?? '').toString().trim();
@@ -66,7 +114,7 @@ class KariyerFutbolcu {
     }
 
     return KariyerFutbolcu(
-      id: doc.id,
+      id: idPrefix != null ? '$idPrefix${doc.id}' : doc.id,
       isim: isim,
       kariyerYolu: kariyerYolu,
       zorluk: zorluk,

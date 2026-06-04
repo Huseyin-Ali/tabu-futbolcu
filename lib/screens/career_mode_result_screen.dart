@@ -30,6 +30,9 @@ class CareerModeResultScreen extends StatefulWidget {
   final int lostRiskCount;
   final int riskScoreGain;
   final int riskScoreLoss;
+  final int blitzTriggerCount;
+  final int blitzCorrectCount;
+  final int blitzBonusScore;
 
   const CareerModeResultScreen({
     super.key,
@@ -50,6 +53,9 @@ class CareerModeResultScreen extends StatefulWidget {
     this.lostRiskCount = 0,
     this.riskScoreGain = 0,
     this.riskScoreLoss = 0,
+    this.blitzTriggerCount = 0,
+    this.blitzCorrectCount = 0,
+    this.blitzBonusScore = 0,
   });
 
   @override
@@ -110,6 +116,9 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
       lostRiskCount: widget.lostRiskCount,
       riskScoreGain: widget.riskScoreGain,
       riskScoreLoss: widget.riskScoreLoss,
+      blitzTriggerCount: widget.blitzTriggerCount,
+      blitzCorrectCount: widget.blitzCorrectCount,
+      blitzBonusScore: widget.blitzBonusScore,
     );
 
     HiveGameStorage.ekleKariyerOyunu(kayit).then((_) {
@@ -233,6 +242,11 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
                     FadeTransition(
                         opacity: _barFade, child: _buildRiskSummary()),
                   if (widget.totalRiskCount > 0) const SizedBox(height: 8),
+                  // ── Blitz özeti (sadece blitz tetiklendiyse)
+                  if (widget.blitzTriggerCount > 0)
+                    FadeTransition(
+                        opacity: _barFade, child: _buildBlitzSummary()),
+                  if (widget.blitzTriggerCount > 0) const SizedBox(height: 8),
                   // ── Accuracy bar
                   FadeTransition(opacity: _barFade, child: _buildAccuracyBar()),
                   const SizedBox(height: 22),
@@ -737,6 +751,86 @@ class _CareerModeResultScreenState extends State<CareerModeResultScreen>
           ),
         ],
       ),
+    );
+  }
+
+  // ── BLITZ SUMMARY ─────────────────────────────────────────────────────────
+
+  Widget _buildBlitzSummary() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFF00E5FF).withOpacity(0.06),
+            const Color(0xFF001A22).withOpacity(0.5),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+            color: const Color(0xFF00E5FF).withOpacity(0.25), width: 1.2),
+        boxShadow: [
+          BoxShadow(
+              color: const Color(0xFF00E5FF).withOpacity(0.08),
+              blurRadius: 14,
+              spreadRadius: -4),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Text('⚡', style: TextStyle(fontSize: 15)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Blitz Mode',
+                  style: TextStyle(
+                    color: Color(0xFF00E5FF),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 14,
+                  runSpacing: 4,
+                  children: [
+                    _blitzChip('${widget.blitzTriggerCount}×', 'tetiklendi'),
+                    _blitzChip('${widget.blitzCorrectCount}', 'doğru'),
+                    _blitzChip('+${widget.blitzBonusScore}', 'bonus puan'),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _blitzChip(String value, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          value,
+          style: const TextStyle(
+            color: Color(0xFF00E5FF),
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0x9900E5FF),
+            fontSize: 11,
+          ),
+        ),
+      ],
     );
   }
 

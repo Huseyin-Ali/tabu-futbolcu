@@ -11,7 +11,10 @@ class Futbolcu {
     required this.tabuKelimeler,
   });
 
-  factory Futbolcu.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+  factory Futbolcu.fromDoc(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc, {
+    String? idPrefix,
+  }) {
     final data = doc.data();
 
     // İsim validation: null, boş string kontrolü
@@ -35,7 +38,7 @@ class Futbolcu {
     // Sadece gerçek tabu kelimeleri döndür (placeholder ekleme)
 
     return Futbolcu(
-      id: doc.id,
+      id: idPrefix != null ? '$idPrefix${doc.id}' : doc.id,
       isim: isim,
       tabuKelimeler: tabu, // Boş liste olabilir, UI'da kontrol edilecek
     );

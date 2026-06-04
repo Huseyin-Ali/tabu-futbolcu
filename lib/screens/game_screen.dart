@@ -19,6 +19,7 @@ class GameScreen extends StatefulWidget {
   final String oyuncu2Adi;
   final int turSayisi;
   final int sure;
+  final String kartTipi;
 
   const GameScreen({
     Key? key,
@@ -26,6 +27,7 @@ class GameScreen extends StatefulWidget {
     required this.oyuncu2Adi,
     required this.turSayisi,
     required this.sure,
+    this.kartTipi = AppConstants.defaultTabuKartTipi,
   }) : super(key: key);
 
   @override
@@ -176,43 +178,47 @@ class _GameScreenState extends State<GameScreen>
 
       showDialog(
         context: context,
+        barrierDismissible: false,
         builder: (BuildContext context) {
-          return AlertDialog(
-            backgroundColor: Colors.white,
-            contentPadding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
-            actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-            content: const Text(
-              'Oyun duraklatıldı. Ana menüye dönmek istediğinizden emin misiniz?',
-              style: TextStyle(color: Colors.black, fontSize: 18),
-              textAlign: TextAlign.center,
+          return PopScope(
+            canPop: false,
+            child: AlertDialog(
+              backgroundColor: Colors.white,
+              contentPadding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+              actionsPadding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+              content: const Text(
+                'Oyun duraklatıldı. Ana menüye dönmek istediğinizden emin misiniz?',
+                style: TextStyle(color: Colors.black, fontSize: 18),
+                textAlign: TextAlign.center,
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    setState(() {
+                      _isPaused = false;
+                      _tickerStartTime = DateTime.now();
+                    });
+                    _ticker.start();
+                    AnalyticsService.logMatchResumed();
+                  },
+                  child: const Text('Devam Et',
+                      style: TextStyle(color: Colors.green, fontSize: 16)),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(
+                          builder: (context) => const WelcomeScreen()),
+                      (route) => false,
+                    );
+                  },
+                  child: const Text('Ana Menüye Dön',
+                      style: TextStyle(color: Colors.red, fontSize: 16)),
+                ),
+              ],
             ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  setState(() {
-                    _isPaused = false;
-                    _tickerStartTime = DateTime.now();
-                  });
-                  _ticker.start();
-                  AnalyticsService.logMatchResumed();
-                },
-                child: const Text('Devam Et',
-                    style: TextStyle(color: Colors.green, fontSize: 16)),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  Navigator.of(context).pushAndRemoveUntil(
-                    MaterialPageRoute(
-                        builder: (context) => const WelcomeScreen()),
-                    (route) => false,
-                  );
-                },
-                child: const Text('Ana Menüye Dön',
-                    style: TextStyle(color: Colors.red, fontSize: 16)),
-              ),
-            ],
           );
         },
       );
@@ -323,7 +329,9 @@ class _GameScreenState extends State<GameScreen>
 
   Future<void> _futbolculariYukle() async {
     try {
-      final futbolcular = await FutbolcuService.getFutbolcularProduction();
+      final futbolcular = await FutbolcuService.getFutbolcularProduction(
+        koleksiyonTipi: widget.kartTipi,
+      );
       if (!mounted) return;
       setState(() {
         _onbellekFutbolcular = futbolcular;

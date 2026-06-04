@@ -15,12 +15,14 @@ class CareerModeSettingsScreen extends StatefulWidget {
 class _CareerModeSettingsScreenState extends State<CareerModeSettingsScreen> {
   int _selectedTime = 60;
   String _selectedDifficulty = 'karışık';
+  String _selectedCollection = 'karışık';
 
   static const int _minSure = 60;
   static const int _maxSure = 300;
   static const int _surAdim = 30;
 
   static const List<String> _difficultyOptions = ['kolay', 'orta', 'zor', 'karışık'];
+  static const List<String> _collectionOptions = ['aktif', 'veteran', 'karışık'];
 
   void _sureAzalt() {
     if (_selectedTime > _minSure) {
@@ -68,6 +70,25 @@ class _CareerModeSettingsScreenState extends State<CareerModeSettingsScreen> {
                       );
                     }).toList(),
                   ),
+                  const SizedBox(height: 24),
+                  _sectionLabel('Futbolcu Koleksiyonu'),
+                  const SizedBox(height: 10),
+                  GridView.count(
+                    crossAxisCount: 3,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisSpacing: 10,
+                    mainAxisSpacing: 10,
+                    childAspectRatio: 1.8,
+                    children: _collectionOptions.map((c) {
+                      return _OptionChip(
+                        label: _collectionLabel(c),
+                        selected: _selectedCollection == c,
+                        accentColor: _collectionColor(c),
+                        onTap: () => setState(() => _selectedCollection = c),
+                      );
+                    }).toList(),
+                  ),
                   const SizedBox(height: 32),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
@@ -85,6 +106,7 @@ class _CareerModeSettingsScreenState extends State<CareerModeSettingsScreen> {
                           builder: (_) => CareerModeGameScreen(
                             sure: _selectedTime,
                             zorluk: _selectedDifficulty,
+                            koleksiyonTipi: _selectedCollection,
                           ),
                         ),
                       );
@@ -260,6 +282,32 @@ class _CareerModeSettingsScreenState extends State<CareerModeSettingsScreen> {
         return Colors.orange;
       case 'zor':
         return Colors.red;
+      case 'karışık':
+        return Colors.purpleAccent;
+      default:
+        return Colors.white;
+    }
+  }
+
+  String _collectionLabel(String c) {
+    switch (c) {
+      case 'aktif':
+        return 'Aktif';
+      case 'veteran':
+        return 'Veteran';
+      case 'karışık':
+        return 'Karışık';
+      default:
+        return c;
+    }
+  }
+
+  Color _collectionColor(String c) {
+    switch (c) {
+      case 'aktif':
+        return Colors.lightBlueAccent;
+      case 'veteran':
+        return Colors.amber;
       case 'karışık':
         return Colors.purpleAccent;
       default:

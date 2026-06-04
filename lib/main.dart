@@ -33,6 +33,7 @@ void main() async {
     await _openHiveBox<GameHistory>(AppConstants.gameHistoryBox);
     await _openHiveBox<dynamic>(AppConstants.gameBox);
     await _openHiveBox<TabuFutbolcu>(AppConstants.futbolcularBox);
+    await _openHiveBox<dynamic>(AppConstants.kariyerFutbolcularCacheBox);
   } catch (e, stackTrace) {
     AppLogger.error('[Hive] Başlatma sırasında kritik hata', e, stackTrace);
   }

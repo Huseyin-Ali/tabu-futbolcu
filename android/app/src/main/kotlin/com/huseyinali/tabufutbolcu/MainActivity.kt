@@ -1,4 +1,4 @@
-package com.example.oyuncu_tahmin_oyunu
+package com.huseyinali.tabufutbolcu
 
 import io.flutter.embedding.android.FlutterActivity
 
