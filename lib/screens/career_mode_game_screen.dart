@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
 import '../models/kariyer_futbolcu.dart';
+import '../models/match_config.dart';
 import '../services/career_mode_service.dart';
 import '../services/match_director_service.dart';
 import '../utils/logger.dart';
@@ -40,12 +41,19 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   int _dogruSayisi = 0;
   int _yanlisSayisi = 0;
   int _pasSayisi = 0;
+  int _maxPasHakki = MatchConfig.defaults().maxPassCount;
+  int _kalanPasHakki = MatchConfig.defaults().maxPassCount;
 
   // Combo sistemi
   int _comboCount = 0;
   int _maxCombo = 0;
   int _bonusScore = 0;
   bool _canKazanildi = false;
+
+  // Adaptive Match Director sayaçları
+  int _cardsSinceLastRisk = 0;
+  int _cardsSinceLastBlitz = 0;
+  int _wrongStreak = 0;
 
   // Can sistemi
   static const int _basLangicCan = 3;
@@ -88,7 +96,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   // Blitz sistemi
   static const int _blitzDuration = 15;
   static const int _blitzBonus = 2;
-  static const int _blitzCooldown = 10; // min kart aralığı
+  static const int _legacyBlitzCooldown = 10;
 
   bool _isBlitzMode = false;
   int _blitzRemainingSeconds = 0;
@@ -102,7 +110,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   bool _riskKabulEdildi = false;
   bool _riskPopupGosteriliyor = false;
   int _kartIndex = 0;
-  int _lastRiskKartiIndex = -10; // başlangıçta uzakta tut
+  int _lastRiskKartiIndex = -10;
   int _totalRiskCount = 0;
   int _acceptedRiskCount = 0;
   int _wonRiskCount = 0;
@@ -110,8 +118,19 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   int _riskScoreGain = 0;
   int _riskScoreLoss = 0;
 
+  // Çarpan Kartı (scoreBoost) sistemi
+  bool _isScoreBoostKarti = false;
+  bool _isScoreBoostActive = false;
+  int _remainingScoreBoostCorrectAnswers = 0;
+  int _cardsSinceLastScoreBoost = 0;
+
   String get _skorStr =>
       _skor % 1 == 0 ? '${_skor.toInt()}' : _skor.toStringAsFixed(1);
+
+  MatchConfig get _matchConfig =>
+      MatchDirectorService.currentConfig ?? MatchConfig.defaults();
+
+  bool get _passLimitAktif => _matchConfig.passLimitEnabled;
 
   /// Zorluğa göre kaç üst üste doğruda +1 bonus verilir.
   int get _comboBonusThreshold {
@@ -263,9 +282,13 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     }
 
     final shuffled = List<KariyerFutbolcu>.from(liste)..shuffle(Random());
+    final config = MatchDirectorService.currentConfig ?? MatchConfig.defaults();
+    final maxPas = config.passLimitEnabled ? config.maxPassCount : 0;
 
     setState(() {
       _tumFutbolcular = shuffled;
+      _maxPasHakki = maxPas;
+      _kalanPasHakki = maxPas;
       _yukleniyor = false;
     });
 
@@ -300,6 +323,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   void _startBlitzMode() {
     if (_isBlitzMode || _oyunBitti) return;
     _blitzTriggerCount++;
+    _cardsSinceLastBlitz = 0;
     _lastBlitzTriggerIndex = _kartIndex;
     setState(() {
       _isBlitzMode = true;
@@ -343,6 +367,89 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     } catch (_) {}
   }
 
+  bool _scoreBoostUygulanabilirMi() =>
+      _isScoreBoostActive &&
+      !_isBlitzMode &&
+      !_kartIpucuAcik &&
+      !_isRiskKarti &&
+      !_isScoreBoostKarti;
+
+  int _normalDogruPuan() =>
+      _scoreBoostUygulanabilirMi() ? _matchConfig.scoreBoostValue : 1;
+
+  void _scoreBoostTuket() {
+    if (!_scoreBoostUygulanabilirMi()) return;
+
+    _remainingScoreBoostCorrectAnswers--;
+    if (_remainingScoreBoostCorrectAnswers <= 0) {
+      _isScoreBoostActive = false;
+      _remainingScoreBoostCorrectAnswers = 0;
+      AppLogger.info('[ScoreBoost] Expired');
+    } else {
+      AppLogger.info(
+        '[ScoreBoost] Applied | remaining=$_remainingScoreBoostCorrectAnswers',
+      );
+    }
+  }
+
+  void _scoreBoostAktifEt() {
+    final config = _matchConfig;
+    _isScoreBoostActive = true;
+    _remainingScoreBoostCorrectAnswers = config.scoreBoostCorrectAnswerCount;
+    AppLogger.info(
+      '[ScoreBoost] Activated | nextCorrect=${config.scoreBoostCorrectAnswerCount} '
+      '| value=${config.scoreBoostValue}',
+    );
+  }
+
+  void _maybeTriggerBlitz({
+    required bool wasRiskCard,
+    required bool wasScoreBoostCard,
+    required bool dogru,
+  }) {
+    if (wasRiskCard || wasScoreBoostCard || _kartIpucuAcik || _isBlitzMode) {
+      return;
+    }
+
+    final config = _matchConfig;
+    final bool shouldEvaluate;
+    if (config.adaptiveDirectorEnabled) {
+      // Adaptif: yanlış seride destek; doğru cevapta combo eşiği korunur
+      shouldEvaluate = dogru ? _comboCount >= 5 : true;
+    } else {
+      shouldEvaluate = dogru && _comboCount >= 5;
+    }
+
+    if (!shouldEvaluate) return;
+
+    final bool blitzTetiklensin;
+    if (config.adaptiveDirectorEnabled) {
+      blitzTetiklensin = MatchDirectorService.shouldSpawnBlitzAdaptive(
+        currentCombo: _comboCount,
+        wrongStreak: _wrongStreak,
+        remainingLives: _currentLives,
+        cardsSinceLastRisk: _cardsSinceLastRisk,
+        cardsSinceLastBlitz: _cardsSinceLastBlitz,
+      );
+    } else {
+      blitzTetiklensin = (_kartIndex - _lastBlitzTriggerIndex) >=
+              _legacyBlitzCooldown &&
+          MatchDirectorService.shouldSpawnBlitz();
+    }
+
+    if (!blitzTetiklensin) return;
+
+    Future.delayed(const Duration(milliseconds: 960), () {
+      if (mounted && !_oyunBitti) _startBlitzMode();
+    });
+    if (kDebugMode) {
+      AppLogger.info(
+        '[Blitz] Blitz tetiklendi! combo: $_comboCount | '
+        'wrongStreak: $_wrongStreak',
+      );
+    }
+  }
+
   void _sonrakiKart() {
     var musait = _tumFutbolcular
         .where((f) => !_kullanilmisIdler.contains(f.id))
@@ -358,14 +465,62 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
     _kartIndex++;
 
-    // Risk kartı kararı: min 5 normal kart, config spawn oranı, üst üste gelmesin
-    final riskMumkun = _kartIndex >= 5 &&
-        (_kartIndex - _lastRiskKartiIndex) >= 5;
-    final bool riskOlsun =
-        riskMumkun && MatchDirectorService.shouldSpawnRiskCard();
+    final config = _matchConfig;
+
+    // Yeni kart gap sayaçları (adaptif mod)
+    if (config.adaptiveDirectorEnabled) {
+      _cardsSinceLastRisk++;
+      _cardsSinceLastBlitz++;
+      _cardsSinceLastScoreBoost++;
+    }
+
+    // Risk kartı kararı: adaptif veya legacy spawn (öncelik 1)
+    final bool riskOlsun;
+    if (config.adaptiveDirectorEnabled) {
+      riskOlsun = MatchDirectorService.shouldSpawnRiskCardAdaptive(
+        currentCombo: _comboCount,
+        wrongStreak: _wrongStreak,
+        remainingLives: _currentLives,
+        cardsSinceLastRisk: _cardsSinceLastRisk,
+        cardsSinceLastBlitz: _cardsSinceLastBlitz,
+      );
+      if (riskOlsun) {
+        _cardsSinceLastRisk = 0;
+      }
+    } else {
+      final riskMumkun = _kartIndex >= 5 &&
+          (_kartIndex - _lastRiskKartiIndex) >= 5;
+      riskOlsun = riskMumkun && MatchDirectorService.shouldSpawnRiskCard();
+      if (riskOlsun) {
+        _lastRiskKartiIndex = _kartIndex;
+      } else {
+        _cardsSinceLastScoreBoost++;
+      }
+    }
+
+    // Çarpan Kartı kararı: risk yoksa ve blitz modunda değilse (öncelik 3)
+    bool scoreBoostOlsun = false;
+    if (!riskOlsun && !_isBlitzMode && config.scoreBoostCardEnabled) {
+      if (config.adaptiveDirectorEnabled) {
+        scoreBoostOlsun =
+            MatchDirectorService.shouldSpawnScoreBoostCardAdaptive(
+          currentCombo: _comboCount,
+          wrongStreak: _wrongStreak,
+          remainingLives: _currentLives,
+          cardsSinceLastScoreBoost: _cardsSinceLastScoreBoost,
+          isScoreBoostActive: _isScoreBoostActive,
+        );
+      } else if (!_isScoreBoostActive &&
+          _cardsSinceLastScoreBoost >= config.scoreBoostMinGap) {
+        scoreBoostOlsun = MatchDirectorService.shouldSpawnScoreBoostCard();
+      }
+
+      if (scoreBoostOlsun) {
+        _cardsSinceLastScoreBoost = 0;
+      }
+    }
 
     if (riskOlsun) {
-      _lastRiskKartiIndex = _kartIndex;
       _totalRiskCount++;
       if (kDebugMode) {
         final rv = _riskValues;
@@ -390,6 +545,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       _kartIpucuAcik = false;
       _kartIpucuMetni = null;
       _isRiskKarti = riskOlsun;
+      _isScoreBoostKarti = scoreBoostOlsun;
       _riskKabulEdildi = false;
       _riskPopupGosteriliyor = riskOlsun;
       _mevcutSecenekler = CareerModeService.generateChoices(
@@ -406,6 +562,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
     // Risk flag'ini şimdi yakala (Future.delayed'de kullanmak için)
     final bool wasRiskCard = _riskKabulEdildi;
+    final bool wasScoreBoostCard = _isScoreBoostKarti;
 
     setState(() {
       _secilenSecenekIsim = isim;
@@ -419,6 +576,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           _skor += rv.reward;
           _wonRiskCount++;
           _riskScoreGain += rv.reward;
+          _wrongStreak = 0;
           // Combo normal artar + bonus sistemi çalışır
           _comboCount++;
           if (_comboCount > _maxCombo) _maxCombo = _comboCount;
@@ -451,6 +609,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           _skor -= rv.penalty;
           _riskScoreLoss += rv.penalty;
           _comboCount = 0; // combo sıfırla, CAN GİTMEZ
+          _wrongStreak++;
           _geribildrim = 'yanlis_risk';
           if (kDebugMode) {
             AppLogger.info(
@@ -462,12 +621,53 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           WidgetsBinding.instance.addPostFrameCallback(
               (_) => _triggerRedFlash());
         }
+      } else if (wasScoreBoostCard) {
+        // ══ Çarpan Kartı cevabı ═══════════════════════════════════════════
+        if (dogru) {
+          _dogruSayisi++;
+          if (_kartIpucuAcik) {
+            _skor += 0.5;
+            _hintedCorrectCount++;
+            _wrongStreak = 0;
+            _geribildrim = 'dogru_ipucu';
+          } else {
+            _skor += 1;
+            _wrongStreak = 0;
+            _comboCount++;
+            if (_comboCount > _maxCombo) _maxCombo = _comboCount;
+            final threshold = _comboBonusThreshold;
+            final isBonus = _comboCount % threshold == 0;
+            if (isBonus) {
+              _skor += 1;
+              _bonusScore++;
+              _currentLives++;
+              _canKazanildi = true;
+              _geribildrim = 'dogru_score_boost_card_bonus';
+              Future.delayed(const Duration(milliseconds: 1400), () {
+                if (mounted) setState(() => _canKazanildi = false);
+              });
+            } else {
+              _geribildrim = 'dogru_score_boost_card';
+            }
+            _scoreBoostAktifEt();
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _triggerFloatingScore('+1'),
+            );
+          }
+        } else {
+          _yanlisSayisi++;
+          _comboCount = 0;
+          _wrongStreak++;
+          _currentLives--;
+          _geribildrim = 'yanlis';
+        }
       } else if (dogru) {
         // ══ Normal / ipuçlu doğru ═════════════════════════════════════════
         _dogruSayisi++;
         if (_kartIpucuAcik) {
           _skor += 0.5;
           _hintedCorrectCount++;
+          _wrongStreak = 0;
           _geribildrim = 'dogru_ipucu';
           if (kDebugMode) {
             AppLogger.info(
@@ -475,7 +675,12 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
             );
           }
         } else {
-          _skor += 1;
+          final normalPuan = _normalDogruPuan();
+          _skor += normalPuan;
+          _wrongStreak = 0;
+          if (_scoreBoostUygulanabilirMi()) {
+            _scoreBoostTuket();
+          }
           // Blitz bonusu
           if (_isBlitzMode) {
             _skor += _blitzBonus;
@@ -491,7 +696,13 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
             _bonusScore++;
             _currentLives++;
             _canKazanildi = true;
-            _geribildrim = _isBlitzMode ? 'dogru_blitz_bonus' : 'dogru_bonus';
+            if (_isBlitzMode) {
+              _geribildrim = 'dogru_blitz_bonus';
+            } else if (normalPuan > 1) {
+              _geribildrim = 'dogru_score_boost_bonus';
+            } else {
+              _geribildrim = 'dogru_bonus';
+            }
             Future.delayed(const Duration(milliseconds: 1400), () {
               if (mounted) setState(() => _canKazanildi = false);
             });
@@ -502,18 +713,28 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
               );
             }
           } else {
-            _geribildrim = _isBlitzMode ? 'dogru_blitz' : 'dogru';
+            if (_isBlitzMode) {
+              _geribildrim = 'dogru_blitz';
+            } else if (normalPuan > 1) {
+              _geribildrim = 'dogru_score_boost';
+            } else {
+              _geribildrim = 'dogru';
+            }
           }
           if (kDebugMode) {
             AppLogger.info(
               '[Combo] combo: $_comboCount/$threshold | maxCombo: $_maxCombo'
-              '${_isBlitzMode ? ' | ⚡ BLITZ +$_blitzBonus' : ''}',
+              '${_isBlitzMode ? ' | ⚡ BLITZ +$_blitzBonus' : ''}'
+              '${normalPuan > 1 ? ' | ⭐ SCORE BOOST +$normalPuan' : ''}',
             );
           }
-          // Floating score: Blitz modunda ⚡+3 göster
           if (_isBlitzMode) {
             WidgetsBinding.instance.addPostFrameCallback(
               (_) => _triggerFloatingScore('⚡+${1 + _blitzBonus}'),
+            );
+          } else if (normalPuan > 1) {
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _triggerFloatingScore('⭐+$normalPuan'),
             );
           }
         }
@@ -521,6 +742,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
         // ══ Normal yanlış (can gider) ══════════════════════════════════════
         _yanlisSayisi++;
         _comboCount = 0;
+        _wrongStreak++;
         _currentLives--;
         _geribildrim = 'yanlis';
         if (kDebugMode) {
@@ -530,19 +752,11 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       }
     });
 
-    // Blitz tetikleme: normal doğru cevap, combo >= 5, cooldown tamam
-    if (dogru && !wasRiskCard && !_kartIpucuAcik && !_isBlitzMode &&
-        _comboCount >= 5 &&
-        (_kartIndex - _lastBlitzTriggerIndex) >= _blitzCooldown) {
-      if (MatchDirectorService.shouldSpawnBlitz()) {
-        Future.delayed(const Duration(milliseconds: 960), () {
-          if (mounted && !_oyunBitti) _startBlitzMode();
-        });
-        if (kDebugMode) {
-          AppLogger.info('[Blitz] Blitz tetiklendi! combo: $_comboCount');
-        }
-      }
-    }
+    _maybeTriggerBlitz(
+      wasRiskCard: wasRiskCard,
+      wasScoreBoostCard: wasScoreBoostCard,
+      dogru: dogru,
+    );
 
     final delay = dogru ? 900 : 1300;
     Future.delayed(Duration(milliseconds: delay), () {
@@ -628,11 +842,36 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
   void _pas() {
     if (_mevcutFutbolcu == null || _geribildrim != null) return;
+
+    final config = _matchConfig;
+    final limitEnabled = config.passLimitEnabled;
+    final isExtraPass = limitEnabled && _kalanPasHakki <= 0;
+    final penalty = isExtraPass
+        ? config.extraPassComboPenalty
+        : config.normalPassComboPenalty;
+    final oldCombo = _comboCount;
+    final newCombo = max(0, oldCombo - penalty);
+
     setState(() {
       _pasSayisi++;
-      _comboCount = 0;
+      if (limitEnabled && _kalanPasHakki > 0) {
+        _kalanPasHakki--;
+      }
+      _comboCount = newCombo;
     });
-    if (kDebugMode) AppLogger.info('[Combo] Pas → combo sıfırlandı');
+
+    if (kDebugMode) {
+      if (isExtraPass) {
+        AppLogger.info(
+          '[Pass] Extra pass used | combo $oldCombo -> $newCombo',
+        );
+      } else {
+        AppLogger.info(
+          '[Pass] Normal pass used | combo $oldCombo -> $newCombo',
+        );
+      }
+    }
+
     _sonrakiKart();
   }
 
@@ -946,12 +1185,19 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
             ],
           ),
           const SizedBox(height: 5),
-          // ── Satır 2: Can ❤️❤️❤️ | Blitz geri sayım | Combo 🔥
+          // ── Satır 2: Can | Pas | Blitz | Combo
           Row(
             children: [
               _buildLivesRow(),
+              if (_passLimitAktif && _maxPasHakki > 0) ...[
+                const SizedBox(width: 8),
+                _buildPassBadge(),
+              ],
               const Spacer(),
               if (_isBlitzMode) _buildBlitzCountdown(),
+              if (_isScoreBoostActive &&
+                  _remainingScoreBoostCorrectAnswers > 0)
+                _buildScoreBoostBadge(),
               const Spacer(),
               _buildComboBadge(),
             ],
@@ -1036,6 +1282,54 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     );
   }
 
+  Widget _buildPassBadge() {
+    if (!_passLimitAktif || _maxPasHakki <= 0) {
+      return const SizedBox.shrink();
+    }
+
+    final pasHakkiBitti = _kalanPasHakki <= 0;
+    final color =
+        pasHakkiBitti ? Colors.redAccent : Colors.orangeAccent;
+
+    return _statPill(
+      borderColor: color,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.skip_next, color: color, size: 14),
+          const SizedBox(width: 4),
+          Text(
+            'PAS $_kalanPasHakki/$_maxPasHakki',
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScoreBoostBadge() {
+    const color = Color(0xFFFFD54F);
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: _statPill(
+        borderColor: color,
+        child: Text(
+          'x${_matchConfig.scoreBoostValue} aktif: '
+          '$_remainingScoreBoostCorrectAnswers doğru kaldı',
+          style: const TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildComboBadge() {
     if (_comboCount == 0) {
       return const SizedBox.shrink();
@@ -1104,16 +1398,25 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     if (futbolcu == null) return const SizedBox.shrink();
 
     final bool isRiskAktif = _isRiskKarti && _riskKabulEdildi;
+    final bool isScoreBoostKart = _isScoreBoostKarti;
     Color borderColor = isRiskAktif
         ? Colors.orangeAccent.withOpacity(0.6)
-        : Colors.white.withOpacity(0.4);
+        : isScoreBoostKart
+            ? const Color(0xFFFFD54F).withOpacity(0.6)
+            : Colors.white.withOpacity(0.4);
     if (_geribildrim == 'dogru' ||
         _geribildrim == 'dogru_bonus' ||
         _geribildrim == 'dogru_ipucu' ||
         _geribildrim == 'dogru_risk' ||
         _geribildrim == 'dogru_risk_bonus' ||
         _geribildrim == 'dogru_blitz' ||
-        _geribildrim == 'dogru_blitz_bonus') borderColor = Colors.greenAccent;
+        _geribildrim == 'dogru_blitz_bonus' ||
+        _geribildrim == 'dogru_score_boost' ||
+        _geribildrim == 'dogru_score_boost_bonus' ||
+        _geribildrim == 'dogru_score_boost_card' ||
+        _geribildrim == 'dogru_score_boost_card_bonus') {
+      borderColor = Colors.greenAccent;
+    }
     if (_geribildrim == 'yanlis') borderColor = Colors.redAccent;
     if (_geribildrim == 'yanlis_risk') borderColor = Colors.orangeAccent;
 
@@ -1136,10 +1439,12 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'KARİYER YOLU',
+              Text(
+                isScoreBoostKart ? '⭐ ÇARPAN KARTI' : 'KARİYER YOLU',
                 style: TextStyle(
-                  color: Colors.white60,
+                  color: isScoreBoostKart
+                      ? const Color(0xFFFFD54F)
+                      : Colors.white60,
                   fontSize: 12,
                   letterSpacing: 1.5,
                   fontWeight: FontWeight.w600,
@@ -1183,6 +1488,35 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
                     ),
                     const SizedBox(width: 6),
                   ],
+                  if (isScoreBoostKart) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFD54F).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                            color: const Color(0xFFFFD54F), width: 1),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('⭐', style: TextStyle(fontSize: 9)),
+                          SizedBox(width: 3),
+                          Text(
+                            'BOOST',
+                            style: TextStyle(
+                              color: Color(0xFFFFD54F),
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
                   // Zorluk badge
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -1210,6 +1544,30 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
               ),
             ],
           ),
+          if (isScoreBoostKart) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFD54F).withOpacity(0.10),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                    color: const Color(0xFFFFD54F).withOpacity(0.35)),
+              ),
+              child: Text(
+                'Bu kartı bilirsen sonraki '
+                '${_matchConfig.scoreBoostCorrectAnswerCount} normal doğru cevap '
+                'x${_matchConfig.scoreBoostValue} puan!',
+                style: const TextStyle(
+                  color: Color(0xFFFFECB3),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
           // Kariyer adımları
           ...List.generate(futbolcu.kariyerYolu.length, (i) {
@@ -1223,13 +1581,20 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
                   decoration: BoxDecoration(
                     color: isRiskAktif
                         ? Colors.deepOrange.withOpacity(0.13)
-                        : Colors.white.withOpacity(0.07),
+                        : isScoreBoostKart
+                            ? const Color(0xFFFFD54F).withOpacity(0.08)
+                            : Colors.white.withOpacity(0.07),
                     borderRadius: BorderRadius.circular(8),
                     border: isRiskAktif
                         ? Border.all(
                             color: Colors.orangeAccent.withOpacity(0.25),
                             width: 1)
-                        : null,
+                        : isScoreBoostKart
+                            ? Border.all(
+                                color:
+                                    const Color(0xFFFFD54F).withOpacity(0.25),
+                                width: 1)
+                            : null,
                   ),
                   child: Text(
                     futbolcu.kariyerYolu[i],
@@ -1329,6 +1694,46 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
                 style: const TextStyle(
                   color: Colors.orangeAccent,
                   fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              )
+            else if (_geribildrim == 'dogru_score_boost_card')
+              Text(
+                '⭐  Doğru!  +1 puan  ·  x${_matchConfig.scoreBoostValue} aktif!',
+                style: const TextStyle(
+                  color: Color(0xFFFFD54F),
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              )
+            else if (_geribildrim == 'dogru_score_boost_card_bonus')
+              Text(
+                '⭐  Doğru!  +1  🔥  +1 Bonus  ·  x${_matchConfig.scoreBoostValue} aktif!',
+                style: const TextStyle(
+                  color: Color(0xFFFFD54F),
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              )
+            else if (_geribildrim == 'dogru_score_boost')
+              Text(
+                '⭐  Doğru!  +${_matchConfig.scoreBoostValue} puan (x${_matchConfig.scoreBoostValue})',
+                style: const TextStyle(
+                  color: Color(0xFFFFD54F),
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
+                textAlign: TextAlign.center,
+              )
+            else if (_geribildrim == 'dogru_score_boost_bonus')
+              Text(
+                '⭐  Doğru!  +${_matchConfig.scoreBoostValue}  🔥  +1 Combo Bonus',
+                style: const TextStyle(
+                  color: Color(0xFFFFD54F),
+                  fontSize: 13,
                   fontWeight: FontWeight.bold,
                 ),
                 textAlign: TextAlign.center,
@@ -2218,23 +2623,43 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   Widget _buildPasButonu() {
     final aktif =
         _geribildrim == null && !_oyunBitti && !_riskPopupGosteriliyor;
+    final limitEnabled = _passLimitAktif;
+    final pasHakkiBitti = limitEnabled && _kalanPasHakki <= 0;
+    final sayacGoster = limitEnabled && _maxPasHakki > 0;
+
+    final Color bgColor = pasHakkiBitti
+        ? Colors.red.shade700.withOpacity(0.9)
+        : Colors.orange.withOpacity(0.85);
+    final Color borderColor = pasHakkiBitti
+        ? Colors.redAccent
+        : Colors.orangeAccent.withOpacity(0.6);
+
+    final String labelText = sayacGoster
+        ? 'PAS $_kalanPasHakki/$_maxPasHakki'
+        : 'Pas';
+
     return SizedBox(
       width: double.infinity,
       child: ElevatedButton.icon(
         style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.orange.withOpacity(0.85),
+          backgroundColor: bgColor,
           foregroundColor: Colors.white,
           disabledBackgroundColor: Colors.orange.withOpacity(0.25),
           padding: const EdgeInsets.symmetric(vertical: 12),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
+            side: BorderSide(color: borderColor, width: 1.5),
           ),
         ),
         onPressed: aktif ? _pas : null,
         icon: const Icon(Icons.skip_next, size: 20),
-        label: const Text(
-          'Pas',
-          style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+        label: Text(
+          labelText,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+            letterSpacing: sayacGoster ? 0.5 : 0,
+          ),
         ),
       ),
     );
