@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
 import '../models/kariyer_futbolcu.dart';
 import '../models/match_config.dart';
+import '../services/analytics_service.dart';
 import '../services/career_mode_service.dart';
 import '../services/match_director_service.dart';
+import '../storage/settings_storage.dart';
 import '../utils/logger.dart';
 import 'career_mode_result_screen.dart';
 import 'welcome_screen.dart';
@@ -93,6 +95,9 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   AudioPlayer? _riskAudioPlayer;
   AudioPlayer? _blitzAudioPlayer;
 
+  // Ses ayarı — Tabu ile ortak (AppConstants.keySesAcik).
+  bool _sesAcik = true;
+
   // Blitz sistemi
   static const int _blitzDuration = 15;
   static const int _blitzBonus = 2;
@@ -110,6 +115,8 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   bool _riskKabulEdildi = false;
   bool _riskPopupGosteriliyor = false;
   int _kartIndex = 0;
+  // İlk kart hiçbir zaman Risk olmamalı — bu, o korumayı uygular.
+  bool _ilkKartGosterildi = false;
   int _lastRiskKartiIndex = -10;
   int _totalRiskCount = 0;
   int _acceptedRiskCount = 0;
@@ -171,6 +178,10 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   bool _oyunBitti = false;
   bool _durduruldu = false;
 
+  // career_game_finished'in oturum başına en fazla bir kez gönderilmesini
+  // garanti eden ayrık guard (_oyunBitti'nin genel oyun state'inden bağımsız).
+  bool _careerGameFinishedLogged = false;
+
   // Şık sistemi
   List<String> _mevcutSecenekler = [];
   String? _secilenSecenekIsim;
@@ -184,7 +195,24 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     super.initState();
     _kalanSure = widget.sure;
     _initRiskAnimations();
+    _sesDurumunuYukle();
     _yukleFutbolcular();
+  }
+
+  Future<void> _sesDurumunuYukle() async {
+    final acik = await SettingsStorage.getSesAcik();
+    if (!mounted) return;
+    setState(() {
+      _sesAcik = acik;
+    });
+  }
+
+  Future<void> _sesDurumunuDegistir() async {
+    setState(() {
+      _sesAcik = !_sesAcik;
+    });
+    await SettingsStorage.setSesAcik(_sesAcik);
+    AnalyticsService.logAudioToggled(isSoundOn: _sesAcik);
   }
 
   void _initRiskAnimations() {
@@ -247,8 +275,44 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
         CurvedAnimation(parent: _blitzPulseCtrl, curve: Curves.easeInOut));
   }
 
+  /// career_game_finished'i oturum başına en fazla bir kez gönderir
+  /// ([_careerGameFinishedLogged] guard'ı). Oyun bittiğinde Blitz hâlâ
+  /// aktifse doğal _endBlitzMode() hiç çalışmamış olur; bu durumda
+  /// career_blitz_finished'i de burada (tek seferlik) tamamlıyoruz — oyun
+  /// state'i (_isBlitzMode vb.) kasıtlı olarak değiştirilmiyor, yalnızca
+  /// analytics event'i gönderiliyor.
+  void _logCareerGameFinished(String gameResult) {
+    if (_careerGameFinishedLogged) return;
+    _careerGameFinishedLogged = true;
+
+    if (_isBlitzMode) {
+      AnalyticsService.logCareerBlitzFinished(
+        difficulty: widget.zorluk,
+        correctCountTotal: _blitzCorrectCount,
+        bonusScoreTotal: _blitzBonusScore,
+      );
+    }
+
+    AnalyticsService.logCareerGameFinished(
+      difficulty: widget.zorluk,
+      score: _skor.round(),
+      durationSeconds: widget.sure - _kalanSure,
+      correctAnswers: _dogruSayisi,
+      wrongAnswers: _yanlisSayisi,
+      passUsedCount: _pasSayisi,
+      hintUsedCount: _oyunIpucuKullanildi ? 1 : 0,
+      maxCombo: _maxCombo,
+      gameResult: gameResult,
+    );
+  }
+
   @override
   void dispose() {
+    if (_mevcutFutbolcu != null && !_careerGameFinishedLogged) {
+      // Ekran oyun bitmeden kapandı (Ana Menü, Baştan Başlat veya geri
+      // gezinme) — gerçek tetiklenme noktası bu, çünkü hepsi buradan geçer.
+      _logCareerGameFinished('quit');
+    }
     _timer?.cancel();
     _popupEntryCtrl.dispose();
     _pulseCtrl.dispose();
@@ -289,8 +353,18 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       _tumFutbolcular = shuffled;
       _maxPasHakki = maxPas;
       _kalanPasHakki = maxPas;
+      _cardsSinceLastRisk = config.riskMinGap;
+      _cardsSinceLastBlitz = config.blitzMinGap;
       _yukleniyor = false;
     });
+
+    AnalyticsService.logCareerGameStarted(
+      difficulty: widget.zorluk,
+      collectionType: widget.koleksiyonTipi,
+      durationLimit: widget.sure,
+      passLimit: maxPas,
+      startingLives: _currentLives,
+    );
 
     _sonrakiKart();
     _timerBaslat();
@@ -335,6 +409,11 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     });
     _blitzPulseCtrl.repeat(reverse: true);
     _playBlitzSound();
+    AnalyticsService.logCareerBlitzStarted(
+      difficulty: widget.zorluk,
+      comboAtTrigger: _comboCount,
+      triggerCount: _blitzTriggerCount,
+    );
     if (kDebugMode) {
       AppLogger.info(
         '[Blitz] BLITZ MODE başladı! combo: $_comboCount | '
@@ -351,6 +430,11 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       _isBlitzMode = false;
       _blitzRemainingSeconds = 0;
     });
+    AnalyticsService.logCareerBlitzFinished(
+      difficulty: widget.zorluk,
+      correctCountTotal: _blitzCorrectCount,
+      bonusScoreTotal: _blitzBonusScore,
+    );
     if (kDebugMode) {
       AppLogger.info(
         '[Blitz] Blitz bitti! doğru: $_blitzCorrectCount | '
@@ -360,11 +444,41 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
   }
 
   void _playBlitzSound() async {
+    if (!_sesAcik) return;
     try {
-      _blitzAudioPlayer?.dispose();
+      _stopBlitzSound();
       _blitzAudioPlayer = AudioPlayer();
-      await _blitzAudioPlayer!.play(AssetSource('sounds/blitz_start.mp3.mp3'));
+      await _blitzAudioPlayer!.play(
+        AssetSource(AppConstants.soundBlitzStart),
+        volume: AppConstants.soundBlitzVolume,
+      );
     } catch (_) {}
+  }
+
+  /// Idempotent: `_blitzAudioPlayer` zaten null ise hiçbir şey yapmaz.
+  /// `dispose()` içeride `release()` → `stop()` çağırır; burada ayrıca
+  /// `stop()` da çağırmak aynı native player'a çakışan iki stop komutu
+  /// gönderiyordu — bu, Blitz sesi aktifken restart sırasında native
+  /// MediaPlayer'ın kilitlenip uygulamayı dondurmasına yol açıyordu
+  /// ("stop called in state 1" / "error (-38, 0)"). Tek güvenli çağrı:
+  /// yalnızca dispose(); hata olursa yutulur, çağıran akışı bloklamaz.
+  void _stopBlitzSound() {
+    final p = _blitzAudioPlayer;
+    _blitzAudioPlayer = null;
+    if (p == null) return;
+    unawaited(p.dispose().catchError((_) {}));
+  }
+
+  /// Ekrandan gerçek çıkış noktalarının (oyun bitti / baştan başlat / ana
+  /// menü) hepsinde çağrılır — hâlâ çalan Risk/Blitz ses ve animasyonlarının
+  /// bir sonraki ekrana/oyuna sızmasını önler. Oyun state'ine (_isBlitzMode
+  /// vb.) veya analytics'e dokunmaz.
+  void _cikistaEfektleriDurdur() {
+    _stopRiskSound();
+    if (_isBlitzMode) {
+      _blitzPulseCtrl.stop();
+      _stopBlitzSound();
+    }
   }
 
   bool _scoreBoostUygulanabilirMi() =>
@@ -407,6 +521,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     required bool wasScoreBoostCard,
     required bool dogru,
   }) {
+    if (_currentLives <= 0) return;
     if (wasRiskCard || wasScoreBoostCard || _kartIpucuAcik || _isBlitzMode) {
       return;
     }
@@ -461,11 +576,47 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       musait = List<KariyerFutbolcu>.from(_tumFutbolcular)..shuffle(Random());
     }
 
-    final secilen = musait[Random().nextInt(musait.length)];
+    // Tam 4 benzersiz şıklı (1 doğru + 3 kariyer-yolu-benzersiz yanlış)
+    // bir doğru oyuncu bulana kadar sırayla dener (bkz.
+    // CareerModeService.pickCardWithValidChoices — havuzdaki uygun
+    // adayların TAMAMI, her biri en fazla bir kez denenir; sabit bir "20
+    // deneme" tavanı yoktur, üst sınır zaten havuzdaki benzersiz aday
+    // sayısıdır, bu yüzden sonsuz döngü oluşamaz). İlk sırada denenen
+    // aday, önceki davranışla tutarlı biçimde rastgele seçilen "tercih
+    // edilen" adaydır (shuffle sonrası ilk eleman); bulunamazsa sıradaki
+    // adaylara geçilir. Hiçbir aday 4 şık üretemezse eksik şıklı bir kart
+    // ASLA gösterilmez; oyun güvenle sonlandırılır.
+    final denemeSirasi = List<KariyerFutbolcu>.from(musait)..shuffle(Random());
+
+    final sonuc = CareerModeService.pickCardWithValidChoices(
+      adaylar: denemeSirasi,
+      tumListe: _tumFutbolcular,
+    );
+
+    if (sonuc == null) {
+      // Havuzdaki bütün uygun adaylar birer kez denendi, hiçbiri 4
+      // benzersiz şıklı geçerli bir kart üretemedi — eksik şıklı kart
+      // göstermek yerine akışı güvenle sonlandır (dondurma/setState
+      // döngüsü yok, _oyunuBitir zaten idempotent).
+      AppLogger.warning(
+        '[CareerMode] ${denemeSirasi.length} adayın tamamı denendi, 4 '
+        'benzersiz şıklı kart bulunamadı — oyun güvenli şekilde '
+        'sonlandırılıyor',
+      );
+      if (mounted && !_oyunBitti) _oyunuBitir();
+      return;
+    }
+
+    final secilenOyuncu = sonuc.dogru;
+    final secenekler = sonuc.secenekler;
 
     _kartIndex++;
 
     final config = _matchConfig;
+
+    // İlk kart hiçbir zaman Risk olmamalı; bayrağı bu kart için tüket.
+    final bool ilkKart = !_ilkKartGosterildi;
+    _ilkKartGosterildi = true;
 
     // Yeni kart gap sayaçları (adaptif mod)
     if (config.adaptiveDirectorEnabled) {
@@ -476,7 +627,11 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
     // Risk kartı kararı: adaptif veya legacy spawn (öncelik 1)
     final bool riskOlsun;
-    if (config.adaptiveDirectorEnabled) {
+    if (ilkKart) {
+      // İlk karttaki Risk olasılığını/gap sayaçlarını değiştirmeden,
+      // yalnızca bu kart için Risk kartı seçimini devre dışı bırak.
+      riskOlsun = false;
+    } else if (config.adaptiveDirectorEnabled) {
       riskOlsun = MatchDirectorService.shouldSpawnRiskCardAdaptive(
         currentCombo: _comboCount,
         wrongStreak: _wrongStreak,
@@ -522,14 +677,20 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
     if (riskOlsun) {
       _totalRiskCount++;
+      final rv = _riskValues;
       if (kDebugMode) {
-        final rv = _riskValues;
         AppLogger.info(
           '[Risk] Risk kartı oluştu! kart#: $_kartIndex | '
-          'zorluk: ${secilen.zorluk} | '
+          'zorluk: ${secilenOyuncu.zorluk} | '
           '+${rv.reward} / -${rv.penalty}',
         );
       }
+      AnalyticsService.logCareerRiskCardShown(
+        difficulty: secilenOyuncu.zorluk,
+        cardIndex: _kartIndex,
+        reward: rv.reward,
+        penalty: rv.penalty,
+      );
     }
     if (riskOlsun) {
       // Animasyonları setState'den sonra tetikle
@@ -537,8 +698,8 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     }
 
     setState(() {
-      _mevcutFutbolcu = secilen;
-      _kullanilmisIdler.add(secilen.id);
+      _mevcutFutbolcu = secilenOyuncu;
+      _kullanilmisIdler.add(secilenOyuncu.id);
       _geribildrim = null;
       _secilenSecenekIsim = null;
       _dogruIsim = '';
@@ -548,11 +709,16 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       _isScoreBoostKarti = scoreBoostOlsun;
       _riskKabulEdildi = false;
       _riskPopupGosteriliyor = riskOlsun;
-      _mevcutSecenekler = CareerModeService.generateChoices(
-        dogru: secilen,
-        tumListe: _tumFutbolcular,
-      );
+      _mevcutSecenekler = secenekler;
     });
+
+    AnalyticsService.logCareerCardShown(
+      difficulty: secilenOyuncu.zorluk,
+      cardIndex: _kartIndex,
+      isRiskCard: riskOlsun,
+      isScoreBoostCard: scoreBoostOlsun,
+      isBlitzActive: _isBlitzMode,
+    );
   }
 
   void _secenekSec(String isim) {
@@ -563,6 +729,8 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     // Risk flag'ini şimdi yakala (Future.delayed'de kullanmak için)
     final bool wasRiskCard = _riskKabulEdildi;
     final bool wasScoreBoostCard = _isScoreBoostKarti;
+    final int livesBefore = _currentLives;
+    final int comboBefore = _comboCount;
 
     setState(() {
       _secilenSecenekIsim = isim;
@@ -752,22 +920,69 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       }
     });
 
-    _maybeTriggerBlitz(
-      wasRiskCard: wasRiskCard,
-      wasScoreBoostCard: wasScoreBoostCard,
-      dogru: dogru,
-    );
+    if (dogru) {
+      AnalyticsService.logCareerAnswerCorrect(
+        difficulty: widget.zorluk,
+        combo: _comboCount,
+        currentLives: _currentLives,
+        isRiskCard: wasRiskCard,
+        isScoreBoostCard: wasScoreBoostCard,
+        isHintUsed: _kartIpucuAcik,
+      );
+      if (_comboCount > comboBefore &&
+          _comboCount % _comboBonusThreshold == 0) {
+        AnalyticsService.logCareerComboReached(
+          difficulty: widget.zorluk,
+          combo: _comboCount,
+          threshold: _comboBonusThreshold,
+        );
+      }
+    } else {
+      AnalyticsService.logCareerAnswerWrong(
+        difficulty: widget.zorluk,
+        currentLives: _currentLives,
+        isRiskCard: wasRiskCard,
+        isScoreBoostCard: wasScoreBoostCard,
+        isHintUsed: _kartIpucuAcik,
+      );
+    }
+
+    if (_currentLives > livesBefore) {
+      AnalyticsService.logCareerLifeGained(
+        difficulty: widget.zorluk,
+        currentLives: _currentLives,
+        source: 'combo_bonus',
+      );
+    } else if (_currentLives < livesBefore) {
+      AnalyticsService.logCareerLifeLost(
+        difficulty: widget.zorluk,
+        currentLives: _currentLives,
+        source: wasScoreBoostCard ? 'score_boost_card_wrong' : 'normal_wrong',
+      );
+    }
+
+    if (!wasRiskCard && _currentLives <= 0) {
+      if (kDebugMode) AppLogger.info('[Game] Can bitti → oyun sona eriyor');
+      Future.delayed(const Duration(milliseconds: 1300), () {
+        if (!mounted || _oyunBitti) return;
+        _oyunuBitir();
+      });
+      return;
+    }
+
+    if (_currentLives > 0) {
+      _maybeTriggerBlitz(
+        wasRiskCard: wasRiskCard,
+        wasScoreBoostCard: wasScoreBoostCard,
+        dogru: dogru,
+      );
+    }
 
     final delay = dogru ? 900 : 1300;
     Future.delayed(Duration(milliseconds: delay), () {
       if (!mounted || _oyunBitti) return;
       if (wasRiskCard) _stopRiskSound();
-      if (!wasRiskCard && _currentLives <= 0) {
-        if (kDebugMode) AppLogger.info('[Game] Can bitti → oyun sona eriyor');
-        _oyunuBitir();
-      } else {
-        _sonrakiKart();
-      }
+      _sonrakiKart();
     });
   }
 
@@ -778,22 +993,26 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
     _playRiskSound();
   }
 
+  /// Idempotent — bkz. [_stopBlitzSound] (aynı çakışan çift-stop riski
+  /// burada da vardı, aynı sebeple tek `dispose()` çağrısına indirildi).
   void _stopRiskSound() {
-    try {
-      final p = _riskAudioPlayer;
-      _riskAudioPlayer = null;
-      p?.stop();
-      p?.dispose();
-    } catch (_) {}
+    final p = _riskAudioPlayer;
+    _riskAudioPlayer = null;
+    if (p == null) return;
+    unawaited(p.dispose().catchError((_) {}));
   }
 
   void _playRiskSound() async {
+    if (!_sesAcik) return;
     try {
       _stopRiskSound();
       final player = AudioPlayer();
       _riskAudioPlayer = player;
       await player.setReleaseMode(ReleaseMode.loop);
-      await player.play(AssetSource('sounds/risk_v1.mp3'));
+      await player.play(
+        AssetSource(AppConstants.soundRisk),
+        volume: AppConstants.soundRiskVolume,
+      );
     } catch (_) {}
   }
 
@@ -824,6 +1043,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       _riskKabulEdildi = true;
       _acceptedRiskCount++;
     });
+    AnalyticsService.logCareerRiskCardAccepted(difficulty: widget.zorluk);
     if (kDebugMode) AppLogger.info('[Risk] Kullanıcı kabul etti');
   }
 
@@ -837,6 +1057,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       _isRiskKarti = false;
       _riskKabulEdildi = false;
     });
+    AnalyticsService.logCareerRiskCardRejected(difficulty: widget.zorluk);
     _sonrakiKart();
   }
 
@@ -860,6 +1081,13 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       _comboCount = newCombo;
     });
 
+    AnalyticsService.logCareerPassUsed(
+      difficulty: widget.zorluk,
+      remainingPassCount: _kalanPasHakki,
+      isExtraPass: isExtraPass,
+      comboAfter: newCombo,
+    );
+
     if (kDebugMode) {
       if (isExtraPass) {
         AppLogger.info(
@@ -877,9 +1105,13 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
   void _oyunuBitir() {
     if (_oyunBitti) return;
-    _stopRiskSound();
+    // _isBlitzMode kasıtlı olarak değiştirilmiyor — career_blitz_finished
+    // event'i zaten _logCareerGameFinished() içinde tek seferlik gönderiliyor.
+    _cikistaEfektleriDurdur();
     _timer?.cancel();
     setState(() => _oyunBitti = true);
+
+    _logCareerGameFinished(_currentLives <= 0 ? 'lose' : 'timeout');
 
     if (kDebugMode) {
       final neden = _currentLives <= 0 ? 'Can bitti' : 'Süre bitti';
@@ -936,6 +1168,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
   void _basdanBaslat() {
     _timer?.cancel();
+    _cikistaEfektleriDurdur();
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
@@ -950,6 +1183,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
 
   void _anaMenuye() {
     _timer?.cancel();
+    _cikistaEfektleriDurdur();
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => const WelcomeScreen()),
@@ -1128,7 +1362,7 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(
         children: [
-          // ── Satır 1: Pause | Timer | Skor
+          // ── Satır 1: Pause | Ses | Süre | Skor
           Row(
             children: [
               GestureDetector(
@@ -1143,6 +1377,24 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
                   ),
                   child: const Icon(Icons.pause_rounded,
                       color: Colors.white, size: 18),
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _sesDurumunuDegistir,
+                child: Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: Colors.white.withOpacity(0.3), width: 1.5),
+                  ),
+                  child: Icon(
+                    _sesAcik ? Icons.volume_up : Icons.volume_off,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -1185,14 +1437,10 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
             ],
           ),
           const SizedBox(height: 5),
-          // ── Satır 2: Can | Pas | Blitz | Combo
+          // ── Satır 2: Can | Blitz | ScoreBoost | Combo
           Row(
             children: [
               _buildLivesRow(),
-              if (_passLimitAktif && _maxPasHakki > 0) ...[
-                const SizedBox(width: 8),
-                _buildPassBadge(),
-              ],
               const Spacer(),
               if (_isBlitzMode) _buildBlitzCountdown(),
               if (_isScoreBoostActive &&
@@ -1279,35 +1527,6 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
           ),
         ),
       ],
-    );
-  }
-
-  Widget _buildPassBadge() {
-    if (!_passLimitAktif || _maxPasHakki <= 0) {
-      return const SizedBox.shrink();
-    }
-
-    final pasHakkiBitti = _kalanPasHakki <= 0;
-    final color =
-        pasHakkiBitti ? Colors.redAccent : Colors.orangeAccent;
-
-    return _statPill(
-      borderColor: color,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.skip_next, color: color, size: 14),
-          const SizedBox(width: 4),
-          Text(
-            'PAS $_kalanPasHakki/$_maxPasHakki',
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -2482,6 +2701,11 @@ class _CareerModeGameScreenState extends State<CareerModeGameScreen>
       _kartIpucuAcik = true;
       _kartIpucuMetni = hint;
     });
+
+    AnalyticsService.logCareerHintUsed(
+      difficulty: widget.zorluk,
+      cardIndex: _kartIndex,
+    );
 
     if (kDebugMode) {
       AppLogger.info('[Hint] İpucu kullanıldı → "$hint"');

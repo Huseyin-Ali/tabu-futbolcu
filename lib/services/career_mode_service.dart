@@ -386,7 +386,25 @@ class CareerModeService {
 
   // ── Şık üretimi ──────────────────────────────────────────────────────────
 
-  /// Doğru oyuncu için 4 şık üretir: 1 doğru + 3 yanlış.
+  /// Kulüp adı karşılaştırması için hafif normalizasyon: yalnızca baş/son
+  /// boşluk temizliği, büyük/küçük harf farkı ve ardışık boşlukların tek
+  /// boşluğa indirilmesi. Türkçe/aksanlı karakterler kasıtlı olarak
+  /// SADELEŞTİRİLMEZ — bu yalnızca isim eşleştirme (`normalizePlayerName`)
+  /// için kullanılan fuzzy bir kural; kariyer yolu karşılaştırmasında farklı
+  /// yazılmış (örn. "Barcelona" / "Barcelone") kulüpler asla aynı kabul
+  /// edilmemeli.
+  static String _normalizeClubName(String text) =>
+      text.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+
+  /// Bir futbolcunun ekranda gerçekten gösterilen kariyer yolundan (kulüp
+  /// sırası korunarak, her kulüp adı [_normalizeClubName] ile normalize
+  /// edilerek) karşılaştırma anahtarı üretir. İki futbolcunun anahtarı
+  /// eşitse, kartta gösterilen kariyer yolları birebir aynıdır — fuzzy
+  /// eşleştirme yapılmaz, yalnızca tam eşitlik kontrol edilir.
+  static String careerPathKey(KariyerFutbolcu f) =>
+      f.kariyerYolu.map(_normalizeClubName).join('||');
+
+  /// Doğru oyuncu için 4 şık üretmeye çalışır: 1 doğru + 3 yanlış.
   ///
   /// Yanlış şık seçim önceliği:
   ///   Aşama 1 → aynı zorluk + aynı son takım
@@ -394,7 +412,19 @@ class CareerModeService {
   ///   Aşama 3 → aynı zorluk, herhangi son takım
   ///   Aşama 4 → tüm havuzdan random
   ///
-  /// Döndürülen liste her çağrıda farklı sırada karıştırılmıştır.
+  /// Bütün aşamalarda, [careerPathKey] doğru oyuncununkiyle veya daha önce
+  /// seçilmiş herhangi bir yanlış şıkkınkiyle birebir aynı olan adaylar
+  /// elenir (yalnızca doğru-yanlış arasında değil, yanlış şıklar kendi
+  /// aralarında da benzersizdir) — aksi hâlde kartta gösterilen kariyer
+  /// yolundan doğru cevap ayırt edilemeyebilir.
+  ///
+  /// **Ya tam 4 eleman (1 doğru + 3 benzersiz yanlış) döner, ya da boş liste
+  /// (`[]`).** 3 benzersiz yanlış şık bulunamazsa hiçbir yarım/eksik liste
+  /// üretilmez — bu durumda çağıran taraf bu doğru oyuncuyu atlayıp başka
+  /// bir doğru oyuncu denemelidir (bkz. `_sonrakiKart` içindeki deneme
+  /// döngüsü). Eksik şıklı bir kart asla UI'a verilmemelidir.
+  ///
+  /// Başarılı dönüşte liste her çağrıda farklı sırada karıştırılmıştır.
   static List<String> generateChoices({
     required KariyerFutbolcu dogru,
     required List<KariyerFutbolcu> tumListe,
@@ -406,6 +436,7 @@ class CareerModeService {
 
     final dogruSonTakim = sonTakimNorm(dogru);
     final dogruZorluk = dogru.zorluk;
+    final dogruYolAnahtari = careerPathKey(dogru);
 
     // Adaylar: doğru oyuncu ve boş isimli oyuncular çıkarıldı
     final adaylar = tumListe
@@ -414,6 +445,7 @@ class CareerModeService {
 
     final secilen = <String>[];
     final secilenIsimler = <String>{dogru.isim};
+    final secilenYolAnahtarlari = <String>{dogruYolAnahtari};
 
     void ekle(List<KariyerFutbolcu> havuz, String asama) {
       final musait = havuz
@@ -422,8 +454,14 @@ class CareerModeService {
         ..shuffle(rng);
       for (final f in musait) {
         if (secilen.length >= 3) break;
+        // Anahtar kontrolü döngü içinde (yalnızca ön filtrede değil) yapılır
+        // — aynı fallback aşamasındaki iki aday birbiriyle aynı kariyer
+        // yoluna sahipse, ikisinin BİRLİKTE seçilmesini de engeller.
+        final yolAnahtari = careerPathKey(f);
+        if (secilenYolAnahtarlari.contains(yolAnahtari)) continue;
         secilen.add(f.isim);
         secilenIsimler.add(f.isim);
+        secilenYolAnahtarlari.add(yolAnahtari);
         if (kDebugMode) {
           AppLogger.info(
             '[CareerMode][ŞIK][$asama] ${f.isim} | '
@@ -473,6 +511,17 @@ class CareerModeService {
       ekle(adaylar, 'Aşama4(random)');
     }
 
+    if (secilen.length < 3) {
+      if (kDebugMode) {
+        AppLogger.info(
+          '[CareerMode][ŞIK] Yetersiz benzersiz yanlış şık '
+          '(${secilen.length}/3) — bu doğru oyuncu için kart üretilmiyor: '
+          '${dogru.isim}',
+        );
+      }
+      return const <String>[];
+    }
+
     final sonuc = [dogru.isim, ...secilen]..shuffle(rng);
 
     if (kDebugMode) {
@@ -480,5 +529,28 @@ class CareerModeService {
     }
 
     return sonuc;
+  }
+
+  /// [adaylar] listesindeki doğru-oyuncu adaylarını SIRAYLA, HER BİRİNİ EN
+  /// FAZLA BİR KEZ dener; [generateChoices] tam 4 şık (1 doğru + 3
+  /// benzersiz yanlış) döndüren İLK adayda durur ve o adayı + şıklarını
+  /// döndürür. Sabit bir deneme üst sınırı yoktur — üst sınır [adaylar]
+  /// listesinin uzunluğudur, bu yüzden hiçbir geçerli aday atlanmaz.
+  ///
+  /// [adaylar] içindeki hiçbir eleman 4 şık üretemezse (liste tamamen
+  /// tarandıktan sonra) `null` döner — eksik şıklı bir kart asla üretilmez,
+  /// çağıran taraf bu durumda oyunu güvenle sonlandırmalıdır.
+  static ({KariyerFutbolcu dogru, List<String> secenekler})?
+      pickCardWithValidChoices({
+    required List<KariyerFutbolcu> adaylar,
+    required List<KariyerFutbolcu> tumListe,
+  }) {
+    for (final aday in adaylar) {
+      final secenekler = generateChoices(dogru: aday, tumListe: tumListe);
+      if (secenekler.length == 4) {
+        return (dogru: aday, secenekler: secenekler);
+      }
+    }
+    return null;
   }
 }

@@ -114,7 +114,7 @@ class MatchDirectorService {
   }
 
   /// Oyuncu performansına göre adaptif blitz spawn oranı hesaplar.
-  /// [wrongStreak] >= 4 için garanti tetikleme bu metotta değil,
+  /// [wrongStreak] >= 3 için garanti tetikleme bu metotta değil,
   /// [shouldSpawnBlitzAdaptive] içinde ele alınır.
   static double computeAdaptiveBlitzRate({
     required int currentCombo,
@@ -126,11 +126,9 @@ class MatchDirectorService {
 
     if (!config.blitzEnabled) return 0;
     if (cardsSinceLastBlitz < config.blitzMinGap) return 0;
+    if (remainingLives <= 0) return 0;
 
     var rate = config.blitzSpawnRate;
-    if (wrongStreak == 3) {
-      rate *= 2;
-    }
     if (remainingLives <= 2) {
       rate *= 1.5;
     }
@@ -144,7 +142,9 @@ class MatchDirectorService {
   static void _logBlitzDebug({
     required int currentCombo,
     required int wrongStreak,
+    required int remainingLives,
     required int cardsSinceLastBlitz,
+    required int blitzMinGap,
     required double finalRate,
     required bool forced,
     required bool result,
@@ -153,7 +153,8 @@ class MatchDirectorService {
 
     AppLogger.debug(
       '[MatchDirectorDebug] blitzCheck combo=$currentCombo '
-      'wrongStreak=$wrongStreak sinceBlitz=$cardsSinceLastBlitz '
+      'wrongStreak=$wrongStreak lives=$remainingLives '
+      'sinceBlitz=$cardsSinceLastBlitz minGap=$blitzMinGap '
       'finalRate=${finalRate.toStringAsFixed(3)} forced=$forced result=$result',
       _logTag,
     );
@@ -212,7 +213,23 @@ class MatchDirectorService {
       _logBlitzDebug(
         currentCombo: currentCombo,
         wrongStreak: wrongStreak,
+        remainingLives: remainingLives,
         cardsSinceLastBlitz: cardsSinceLastBlitz,
+        blitzMinGap: config.blitzMinGap,
+        finalRate: 0,
+        forced: false,
+        result: false,
+      );
+      return false;
+    }
+
+    if (remainingLives <= 0) {
+      _logBlitzDebug(
+        currentCombo: currentCombo,
+        wrongStreak: wrongStreak,
+        remainingLives: remainingLives,
+        cardsSinceLastBlitz: cardsSinceLastBlitz,
+        blitzMinGap: config.blitzMinGap,
         finalRate: 0,
         forced: false,
         result: false,
@@ -224,7 +241,9 @@ class MatchDirectorService {
       _logBlitzDebug(
         currentCombo: currentCombo,
         wrongStreak: wrongStreak,
+        remainingLives: remainingLives,
         cardsSinceLastBlitz: cardsSinceLastBlitz,
+        blitzMinGap: config.blitzMinGap,
         finalRate: 0,
         forced: false,
         result: false,
@@ -232,11 +251,13 @@ class MatchDirectorService {
       return false;
     }
 
-    if (wrongStreak >= 4) {
+    if (wrongStreak >= 3) {
       _logBlitzDebug(
         currentCombo: currentCombo,
         wrongStreak: wrongStreak,
+        remainingLives: remainingLives,
         cardsSinceLastBlitz: cardsSinceLastBlitz,
+        blitzMinGap: config.blitzMinGap,
         finalRate: 1,
         forced: true,
         result: true,
@@ -262,7 +283,9 @@ class MatchDirectorService {
     _logBlitzDebug(
       currentCombo: currentCombo,
       wrongStreak: wrongStreak,
+      remainingLives: remainingLives,
       cardsSinceLastBlitz: cardsSinceLastBlitz,
+      blitzMinGap: config.blitzMinGap,
       finalRate: finalRate,
       forced: false,
       result: triggered,

@@ -7,6 +7,7 @@ import 'package:audioplayers/audioplayers.dart';
 import '../widgets/common_title.dart';
 import '../widgets/common_card.dart';
 import '../storage/hive_game_storage.dart';
+import '../storage/settings_storage.dart';
 import '../services/futbolcu_service.dart';
 import '../models/futbolcu.dart';
 import '../constants/app_constants.dart';
@@ -89,16 +90,18 @@ class _GameScreenState extends State<GameScreen>
   Future<void> _ayarlariYukle() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final pasHakki =
-          prefs.getInt(AppConstants.keyPasHakki) ?? AppConstants.defaultPasHakki;
+      final pasHakki = (prefs.getInt(AppConstants.keyPasHakki) ??
+              AppConstants.defaultPasHakki)
+          .clamp(AppConstants.minPasHakki, AppConstants.maxPasHakki);
       setState(() {
         _totalTime = prefs.getInt(AppConstants.keyZamanLimiti) ??
             AppConstants.defaultZamanLimiti;
         _currentTime = _totalTime;
         _team1PasHakki = pasHakki;
         _team2PasHakki = pasHakki;
-        _tabuCezasi = prefs.getInt(AppConstants.keyTabuCezasi) ??
-            AppConstants.defaultTabuCezasi;
+        _tabuCezasi = (prefs.getInt(AppConstants.keyTabuCezasi) ??
+                AppConstants.defaultTabuCezasi)
+            .clamp(AppConstants.minTabuCezasi, AppConstants.maxTabuCezasi);
         _puanHedefi = prefs.getInt(AppConstants.keyPuanHedefi) ??
             AppConstants.defaultPuanHedefi;
       });
@@ -130,27 +133,26 @@ class _GameScreenState extends State<GameScreen>
   }
 
   Future<void> _sesDurumunuYukle() async {
-    final prefs = await SharedPreferences.getInstance();
+    final acik = await SettingsStorage.getSesAcik();
     setState(() {
-      _sesAcik =
-          prefs.getBool(AppConstants.keySesAcik) ?? AppConstants.defaultSesAcik;
+      _sesAcik = acik;
     });
   }
 
   Future<void> _sesDurumunuDegistir() async {
-    final prefs = await SharedPreferences.getInstance();
     setState(() {
       _sesAcik = !_sesAcik;
-      prefs.setBool(AppConstants.keySesAcik, _sesAcik);
     });
+    await SettingsStorage.setSesAcik(_sesAcik);
     AnalyticsService.logAudioToggled(isSoundOn: _sesAcik);
   }
 
-  Future<void> _sesCal(String sesDosyasi) async {
+  Future<void> _sesCal(String sesDosyasi, {double volume = 1.0}) async {
     if (!_sesAcik) return;
     try {
       await _audioPlayer.stop();
       await _audioPlayer.setSource(AssetSource(sesDosyasi));
+      await _audioPlayer.setVolume(volume);
       await _audioPlayer.resume();
     } catch (e) {
       // Ses çalma hatası kritik değil
@@ -400,7 +402,7 @@ class _GameScreenState extends State<GameScreen>
   }
 
   void _dogruBildi() async {
-    await _sesCal(AppConstants.soundGol);
+    await _sesCal(AppConstants.soundGol, volume: AppConstants.soundGolVolume);
 
     // setState öncesi anlık değerleri yakala (futbolcuSec sonrası değişir).
     final activeTeam = _team1Sirasi ? _team1Ismi : _team2Ismi;
@@ -468,7 +470,8 @@ class _GameScreenState extends State<GameScreen>
   }
 
   void _tabuYapildi() async {
-    await _sesCal(AppConstants.soundWhistle);
+    await _sesCal(AppConstants.soundWhistle,
+        volume: AppConstants.soundWhistleVolume);
 
     final activeTeam = _team1Sirasi ? _team1Ismi : _team2Ismi;
     final currentPlayer = _secilenFutbolcu;

@@ -27,6 +27,23 @@ class AnalyticsService {
   static const String _matchFinished = 'match_finished';
   static const String _audioToggled = 'audio_toggled';
 
+  // ── Kariyer Avı event adı sabitleri ──────────────────────────────────────
+  static const String _careerGameStarted = 'career_game_started';
+  static const String _careerCardShown = 'career_card_shown';
+  static const String _careerAnswerCorrect = 'career_answer_correct';
+  static const String _careerAnswerWrong = 'career_answer_wrong';
+  static const String _careerPassUsed = 'career_pass_used';
+  static const String _careerHintUsed = 'career_hint_used';
+  static const String _careerComboReached = 'career_combo_reached';
+  static const String _careerLifeGained = 'career_life_gained';
+  static const String _careerLifeLost = 'career_life_lost';
+  static const String _careerRiskCardShown = 'career_risk_card_shown';
+  static const String _careerRiskCardAccepted = 'career_risk_card_accepted';
+  static const String _careerRiskCardRejected = 'career_risk_card_rejected';
+  static const String _careerBlitzStarted = 'career_blitz_started';
+  static const String _careerBlitzFinished = 'career_blitz_finished';
+  static const String _careerGameFinished = 'career_game_finished';
+
   // ── Bootstrap ─────────────────────────────────────────────────────────
 
   /// [AppBootstrapResult.analyticsAvailable] değeriyle çağrılmalıdır.
@@ -42,8 +59,7 @@ class AnalyticsService {
 
   // ── İç yardımcılar ────────────────────────────────────────────────────
 
-  static Future<void> _log(
-      String name, Map<String, Object> parameters) async {
+  static Future<void> _log(String name, Map<String, Object> parameters) async {
     if (!_available) {
       if (kDebugMode) {
         AppLogger.debug('[Analytics] Atlandı: $name (analytics pasif)');
@@ -54,10 +70,16 @@ class AnalyticsService {
       await _fa.logEvent(name: name, parameters: parameters);
     } catch (e) {
       if (kDebugMode) {
-        AppLogger.warning('[Analytics] Event gönderilemedi: $name', e.toString());
+        AppLogger.warning(
+            '[Analytics] Event gönderilemedi: $name', e.toString());
       }
     }
   }
+
+  /// Firebase Analytics event parametreleri yalnızca String/sayısal
+  /// değerleri destekler — `bool` desteklenmez ve gönderilirse logEvent
+  /// sessizce/hata ile başarısız olur. Bool'lar 0/1 int'e çevrilir.
+  static int _b(bool value) => value ? 1 : 0;
 
   static Future<void> _logSimple(String name) async {
     if (!_available) {
@@ -70,7 +92,8 @@ class AnalyticsService {
       await _fa.logEvent(name: name);
     } catch (e) {
       if (kDebugMode) {
-        AppLogger.warning('[Analytics] Event gönderilemedi: $name', e.toString());
+        AppLogger.warning(
+            '[Analytics] Event gönderilemedi: $name', e.toString());
       }
     }
   }
@@ -191,5 +214,221 @@ class AnalyticsService {
 
   /// Ses simgesine dokunulduğunda.
   static Future<void> logAudioToggled({required bool isSoundOn}) =>
-      _log(_audioToggled, {'is_sound_on': isSoundOn});
+      _log(_audioToggled, {'is_sound_on': _b(isSoundOn)});
+
+  // ── Kariyer Avı Public API ────────────────────────────────────────────
+
+  /// Kariyer Avı futbolcuları yüklenip ilk kart gösterilmeden hemen önce.
+  static Future<void> logCareerGameStarted({
+    required String difficulty,
+    required String collectionType,
+    required int durationLimit,
+    required int passLimit,
+    required int startingLives,
+  }) =>
+      _log(_careerGameStarted, {
+        'game_mode': 'career',
+        'difficulty': difficulty,
+        'collection_type': collectionType,
+        'duration_limit': durationLimit,
+        'pass_limit': passLimit,
+        'starting_lives': startingLives,
+      });
+
+  /// Ekranda yeni bir Kariyer Avı kartı göründüğünde. Yüksek kardinaliteli
+  /// oyuncu kimliği/ismi kasıtlı olarak gönderilmez.
+  static Future<void> logCareerCardShown({
+    required String difficulty,
+    required int cardIndex,
+    required bool isRiskCard,
+    required bool isScoreBoostCard,
+    required bool isBlitzActive,
+  }) =>
+      _log(_careerCardShown, {
+        'difficulty': difficulty,
+        'card_index': cardIndex,
+        'is_risk_card': _b(isRiskCard),
+        'is_score_boost_card': _b(isScoreBoostCard),
+        'is_blitz_active': _b(isBlitzActive),
+      });
+
+  /// Kariyer Avı'nda doğru cevap verildiğinde.
+  static Future<void> logCareerAnswerCorrect({
+    required String difficulty,
+    required int combo,
+    required int currentLives,
+    required bool isRiskCard,
+    required bool isScoreBoostCard,
+    required bool isHintUsed,
+  }) =>
+      _log(_careerAnswerCorrect, {
+        'difficulty': difficulty,
+        'combo': combo,
+        'current_lives': currentLives,
+        'is_risk_card': _b(isRiskCard),
+        'is_score_boost_card': _b(isScoreBoostCard),
+        'is_hint_used': _b(isHintUsed),
+      });
+
+  /// Kariyer Avı'nda yanlış cevap verildiğinde.
+  static Future<void> logCareerAnswerWrong({
+    required String difficulty,
+    required int currentLives,
+    required bool isRiskCard,
+    required bool isScoreBoostCard,
+    required bool isHintUsed,
+  }) =>
+      _log(_careerAnswerWrong, {
+        'difficulty': difficulty,
+        'current_lives': currentLives,
+        'is_risk_card': _b(isRiskCard),
+        'is_score_boost_card': _b(isScoreBoostCard),
+        'is_hint_used': _b(isHintUsed),
+      });
+
+  /// PAS kullanıldığında (normal veya ekstra pas).
+  static Future<void> logCareerPassUsed({
+    required String difficulty,
+    required int remainingPassCount,
+    required bool isExtraPass,
+    required int comboAfter,
+  }) =>
+      _log(_careerPassUsed, {
+        'difficulty': difficulty,
+        'remaining_pass_count': remainingPassCount,
+        'is_extra_pass': _b(isExtraPass),
+        'combo_after': comboAfter,
+      });
+
+  /// İpucu kullanıldığında (oyun başına tek hak).
+  static Future<void> logCareerHintUsed({
+    required String difficulty,
+    required int cardIndex,
+  }) =>
+      _log(_careerHintUsed, {
+        'difficulty': difficulty,
+        'card_index': cardIndex,
+      });
+
+  /// Combo bonus eşiğine ulaşılıp +1 puan verildiğinde.
+  static Future<void> logCareerComboReached({
+    required String difficulty,
+    required int combo,
+    required int threshold,
+  }) =>
+      _log(_careerComboReached, {
+        'difficulty': difficulty,
+        'combo': combo,
+        'threshold': threshold,
+      });
+
+  /// Combo bonusuyla can kazanıldığında.
+  static Future<void> logCareerLifeGained({
+    required String difficulty,
+    required int currentLives,
+    required String source,
+  }) =>
+      _log(_careerLifeGained, {
+        'difficulty': difficulty,
+        'current_lives': currentLives,
+        'source': source,
+      });
+
+  /// Yanlış cevapla can kaybedildiğinde (Risk kartı can düşürmez).
+  static Future<void> logCareerLifeLost({
+    required String difficulty,
+    required int currentLives,
+    required String source,
+  }) =>
+      _log(_careerLifeLost, {
+        'difficulty': difficulty,
+        'current_lives': currentLives,
+        'source': source,
+      });
+
+  /// Risk kartı ekrana geldiğinde.
+  static Future<void> logCareerRiskCardShown({
+    required String difficulty,
+    required int cardIndex,
+    required int reward,
+    required int penalty,
+  }) =>
+      _log(_careerRiskCardShown, {
+        'difficulty': difficulty,
+        'card_index': cardIndex,
+        'reward': reward,
+        'penalty': penalty,
+      });
+
+  /// Risk kartı kabul edildiğinde.
+  static Future<void> logCareerRiskCardAccepted({
+    required String difficulty,
+  }) =>
+      _log(_careerRiskCardAccepted, {'difficulty': difficulty});
+
+  /// Risk kartı pas geçildiğinde.
+  static Future<void> logCareerRiskCardRejected({
+    required String difficulty,
+  }) =>
+      _log(_careerRiskCardRejected, {'difficulty': difficulty});
+
+  /// Blitz modu başladığında (normal veya wrongStreak>=3 zorlamalı tetikleme).
+  static Future<void> logCareerBlitzStarted({
+    required String difficulty,
+    required int comboAtTrigger,
+    required int triggerCount,
+  }) =>
+      _log(_careerBlitzStarted, {
+        'difficulty': difficulty,
+        'combo_at_trigger': comboAtTrigger,
+        'trigger_count': triggerCount,
+      });
+
+  /// Blitz modu süresi dolduğunda. Sayaçlar bu oyun için kümülatiftir
+  /// (yalnızca bu Blitz oturumuna ait değildir) — [CareerGameHistory] ile
+  /// aynı toplam sayaçlar kullanılır, yeni bir oturum sayaç eklenmez.
+  static Future<void> logCareerBlitzFinished({
+    required String difficulty,
+    required int correctCountTotal,
+    required int bonusScoreTotal,
+  }) =>
+      _log(_careerBlitzFinished, {
+        'difficulty': difficulty,
+        'correct_count_total': correctCountTotal,
+        'bonus_score_total': bonusScoreTotal,
+      });
+
+  /// Kariyer Avı oyunu bittiğinde — can bitti, süre bitti veya oyuncu
+  /// bitirmeden ana menüye/yeniden başlatmaya çıktı.
+  /// [gameResult] `win`/`lose`/`timeout`/`quit` kümesine normalize edilir;
+  /// tanınmayan bir değer güvenli varsayılan olarak `quit`'e düşer.
+  /// Not: Kariyer Avı'nda şu an bir "kazanma" koşulu yok, bu yüzden `win`
+  /// üretilmez — küme yalnızca gelecekteki bir kazanma koşuluna hazırlıktır.
+  static Future<void> logCareerGameFinished({
+    required String difficulty,
+    required int score,
+    required int durationSeconds,
+    required int correctAnswers,
+    required int wrongAnswers,
+    required int passUsedCount,
+    required int hintUsedCount,
+    required int maxCombo,
+    required String gameResult,
+  }) {
+    const allowedResults = {'win', 'lose', 'timeout', 'quit'};
+    final normalizedResult =
+        allowedResults.contains(gameResult) ? gameResult : 'quit';
+    return _log(_careerGameFinished, {
+      'game_mode': 'career',
+      'difficulty': difficulty,
+      'score': score,
+      'duration': durationSeconds,
+      'correct_answers': correctAnswers,
+      'wrong_answers': wrongAnswers,
+      'pass_used_count': passUsedCount,
+      'hint_used_count': hintUsedCount,
+      'max_combo': maxCombo,
+      'game_result': normalizedResult,
+    });
+  }
 }

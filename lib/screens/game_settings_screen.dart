@@ -41,10 +41,12 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
     setState(() {
       _zamanLimiti = prefs.getInt(AppConstants.keyZamanLimiti) ??
           AppConstants.defaultZamanLimiti;
-      _pasHakki =
-          prefs.getInt(AppConstants.keyPasHakki) ?? AppConstants.defaultPasHakki;
-      _tabuCezasi = prefs.getInt(AppConstants.keyTabuCezasi) ??
-          AppConstants.defaultTabuCezasi;
+      _pasHakki = (prefs.getInt(AppConstants.keyPasHakki) ??
+              AppConstants.defaultPasHakki)
+          .clamp(AppConstants.minPasHakki, AppConstants.maxPasHakki);
+      _tabuCezasi = (prefs.getInt(AppConstants.keyTabuCezasi) ??
+              AppConstants.defaultTabuCezasi)
+          .clamp(AppConstants.minTabuCezasi, AppConstants.maxTabuCezasi);
       _puanHedefi =
           prefs.getInt(AppConstants.keyPuanHedefi) ?? AppConstants.defaultPuanHedefi;
       _takim1Sirasi = prefs.getBool(AppConstants.keyTakim1Sirasi) ?? true;
@@ -59,7 +61,13 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(AppConstants.keyZamanLimiti, _zamanLimiti);
     await prefs.setInt(AppConstants.keyPasHakki, _pasHakki);
-    await prefs.setInt(AppConstants.keyTabuCezasi, _tabuCezasi);
+    await prefs.setInt(
+      AppConstants.keyTabuCezasi,
+      _tabuCezasi.clamp(
+        AppConstants.minTabuCezasi,
+        AppConstants.maxTabuCezasi,
+      ),
+    );
     await prefs.setInt(AppConstants.keyPuanHedefi, _puanHedefi);
     await prefs.setBool(AppConstants.keyTakim1Sirasi, _takim1Sirasi);
     await prefs.setString(AppConstants.keyTakim1Ismi, _takim1Ismi);
@@ -313,24 +321,36 @@ class _GameSettingsScreenState extends State<GameSettingsScreen> {
                             _ayarCard(
                               label: 'Pas Hakkı',
                               value: _pasHakki,
-                              min: 0,
-                              max: 5,
+                              min: AppConstants.minPasHakki,
+                              max: AppConstants.maxPasHakki,
                               cardPad: cardPad,
                               iconMinSize: iconMinSize,
-                              onInc: () => setState(() => _pasHakki++),
-                              onDec: () => setState(() => _pasHakki--),
+                              onInc: () => setState(() => _pasHakki =
+                                  (_pasHakki + 1)
+                                      .clamp(AppConstants.minPasHakki,
+                                          AppConstants.maxPasHakki)),
+                              onDec: () => setState(() => _pasHakki =
+                                  (_pasHakki - 1)
+                                      .clamp(AppConstants.minPasHakki,
+                                          AppConstants.maxPasHakki)),
                             ),
                             SizedBox(height: cardGap),
                             _ayarCard(
                               label: 'Tabu Cezası',
                               value: _tabuCezasi,
                               unit: ' puan',
-                              min: 0,
-                              max: 10,
+                              min: AppConstants.minTabuCezasi,
+                              max: AppConstants.maxTabuCezasi,
                               cardPad: cardPad,
                               iconMinSize: iconMinSize,
-                              onInc: () => setState(() => _tabuCezasi++),
-                              onDec: () => setState(() => _tabuCezasi--),
+                              onInc: () => setState(() => _tabuCezasi =
+                                  (_tabuCezasi + 1).clamp(
+                                      AppConstants.minTabuCezasi,
+                                      AppConstants.maxTabuCezasi)),
+                              onDec: () => setState(() => _tabuCezasi =
+                                  (_tabuCezasi - 1).clamp(
+                                      AppConstants.minTabuCezasi,
+                                      AppConstants.maxTabuCezasi)),
                             ),
                             SizedBox(height: cardGap),
                             _ayarCard(

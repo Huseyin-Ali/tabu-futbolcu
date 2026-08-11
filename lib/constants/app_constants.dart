@@ -41,6 +41,14 @@ class AppConstants {
   static const String soundWhistle = 'sounds/whistle.mp3';
   static const String soundGol = 'sounds/gol.mp3';
   static const String soundAlkis = 'sounds/alkis.mp3';
+  static const String soundBlitzStart = 'sounds/blitz_start.mp3.mp3';
+  static const String soundRisk = 'sounds/risk_v1.mp3';
+
+  // Ses Seviyeleri (0.0-1.0) — ffmpeg loudnorm ölçümüne göre dengelendi
+  static const double soundWhistleVolume = 0.50;
+  static const double soundGolVolume = 0.85;
+  static const double soundBlitzVolume = 0.30;
+  static const double soundRiskVolume = 0.35;
 
   // Asset Yolları
   static const String assetDuvarKagidi = 'assets/duvar_kagidi.jpg';
